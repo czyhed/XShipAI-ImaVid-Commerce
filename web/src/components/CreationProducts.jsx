@@ -6,6 +6,7 @@ import { canWrite } from '../lib/auth.js';
 import '../styles/creation-products.css';
 
 const base='/api/creation';
+const PASTE_TYPES={'image/png':'png','image/jpeg':'jpg','image/webp':'webp'};
 async function upload(backend,file,role,productId) {
  const query=new URLSearchParams({name:file.name,mime:file.type,role,...(productId?{productId}:{})});
  const response=await fetch(`${base}/assets/upload?${query}`,{method:'POST',headers:{'Content-Type':'application/octet-stream','X-CSRF-Token':backend.csrf},body:file});
@@ -38,7 +39,10 @@ const cacheOwner=backend=>backend?.session?.user?.id||backend?.session?.user?.em
 
 export default function CreationProducts({backend,notify,onCreateProject,onOpenProduct,onSelectionChange,onWorkflowEditingChange,productId}) {
  const [product,setProduct]=useState(null),[selected,setSelected]=useState(productId||null),[input,setInput]=useState(''),[text,setText]=useState(''),[attachments,setAttachments]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loading,setLoading]=useState(Boolean(productId)),[name,setName]=useState(''),[fields,setFields]=useState([]),[assets,setAssets]=useState({}),[tab,setTab]=useState('chat'),[dirty,setDirty]=useState(false),[listOpen,setListOpen]=useState(false);
+ const [uploading,setUploading]=useState(0),[pending,setPending]=useState(null);
  const key=useRef(null),epoch=useRef(0),threadRef=useRef(null),composerRef=useRef(null),write=canWrite(backend.session);
+ // 输入框在发送、识别期间保持可编辑：用 ref 读取最新输入，用 gen 丢弃切换商品前发起的上传结果。
+ const textRef=useRef(''),attachmentsRef=useRef([]),uploadsRef=useRef(0),gen=useRef(0);textRef.current=text;attachmentsRef.current=attachments;
  const callbacks=useRef({onSelectionChange,onWorkflowEditingChange});callbacks.current={onSelectionChange,onWorkflowEditingChange};
  useEffect(()=>{callbacks.current.onSelectionChange?.(selected);},[selected]);
  useEffect(()=>{callbacks.current.onWorkflowEditingChange?.(Boolean(dirty||text||attachments.length||busy));},[dirty,text,attachments.length,busy]);
@@ -62,19 +66,56 @@ export default function CreationProducts({backend,notify,onCreateProject,onOpenP
  useEffect(()=>{const el=composerRef.current;if(!el)return;el.style.height='auto';el.style.height=`${Math.min(Math.max(el.scrollHeight,44),200)}px`;},[text,attachments.length]);
  // 新消息或识别状态变化后滚动到底部。
  useEffect(()=>{const el=threadRef.current;if(el)el.scrollTop=el.scrollHeight;},[product?.messages?.length,busy,tab]);
- const navigate=id=>{if(busy)return;if((dirty||text||attachments.length)&&!window.confirm('当前输入尚未保存，仍要切换商品吗？'))return;setText('');setAttachments([]);setDirty(false);key.current=null;setListOpen(false);if(!id)setTab('chat');setSelected(id);if(id)onOpenProduct?.(id);};
+ const navigate=id=>{if(busy)return;if((dirty||text||attachments.length)&&!window.confirm('当前输入尚未保存，仍要切换商品吗？'))return;gen.current+=1;setText('');setAttachments([]);setDirty(false);key.current=null;setListOpen(false);if(!id)setTab('chat');setSelected(id);if(id)onOpenProduct?.(id);};
  const run=async fn=>{if(busy)return;setBusy(true);setError('');try{await fn();}catch(e){showError(e);}finally{setBusy(false);}};
- const send=()=>run(async()=>{
-  key.current ||= crypto.randomUUID();
-  const payload={text,evidenceIds:attachments.map(a=>a.id),requestKey:key.current,...(product?{revision:product.revision}:{})};
-  const result=await api(`${base}/products${product?'/'+product.id:''}/chat`,payload);
-  acceptProduct(result.product);setAssets(old=>({...old,...Object.fromEntries(attachments.map(a=>[a.id,a]))}));
-  if(result.error){setError(result.error.message);notify?.(result.error.message);}else{setText('');setAttachments([]);key.current=null;}
- });
- const addFiles=(event,role)=>{const files=[...event.target.files];event.target.value='';run(async()=>{
-  if(role==='evidence'&&files.length+attachments.length>8)throw new Error('每条消息最多 8 张资料图片。');
-  for(const file of files){const asset=await upload(backend,file,role,product?.id);setAssets(old=>({...old,[asset.id]:asset}));if(role==='evidence'){setAttachments(old=>[...old,asset]);key.current=null;}else if(product){const result=await api(`${base}/products/${product.id}/creative-assets`,{revision:(await api(`${base}/products/${product.id}`)).product.revision,assetId:asset.id});acceptProduct(result.product);}}
- });};
+ // 发送后立即清空输入框，用户可继续编辑 / 粘贴下一条；失败时把内容放回（输入框已有新内容则排在其前面）。
+ const restore=sent=>{
+  const untouched=!textRef.current&&!attachmentsRef.current.length;
+  setText(cur=>cur?`${sent.text}\n${cur}`:sent.text);
+  setAttachments(cur=>[...sent.attachments,...cur].slice(0,8));
+  key.current=untouched?sent.key:null;
+ };
+ const send=()=>{
+  if(busy||uploading||!canSend)return;
+  const sent={text,attachments,key:(key.current||=crypto.randomUUID())};
+  const revision=product?.revision,productId=product?.id;
+  setText('');setAttachments([]);key.current=null;setPending({text:sent.text,evidenceIds:sent.attachments.map(a=>a.id)});
+  run(async()=>{
+   try{
+    const payload={text:sent.text,evidenceIds:sent.attachments.map(a=>a.id),requestKey:sent.key,...(productId?{revision}:{})};
+    const result=await api(`${base}/products${productId?'/'+productId:''}/chat`,payload);
+    acceptProduct(result.product);setAssets(old=>({...old,...Object.fromEntries(sent.attachments.map(a=>[a.id,a]))}));
+    if(result.error){restore(sent);setError(result.error.message);notify?.(result.error.message);}
+   }catch(e){restore(sent);throw e;}
+   finally{setPending(null);}
+  });
+ };
+ // 资料图片的上传独立于 busy：发送、识别期间也能选择或粘贴下一条消息的图片。
+ const addEvidence=async files=>{
+  if(!files.length)return;
+  if(attachmentsRef.current.length+uploadsRef.current+files.length>8){showError(new Error('每条消息最多 8 张资料图片。'));return;}
+  const ticket=gen.current;uploadsRef.current+=files.length;setUploading(n=>n+files.length);setError('');
+  for(const file of files){
+   try{
+    const asset=await upload(backend,file,'evidence',product?.id);
+    if(ticket===gen.current){setAssets(old=>({...old,[asset.id]:asset}));setAttachments(old=>[...old,asset]);key.current=null;}
+   }catch(e){if(ticket===gen.current)showError(e);}
+   finally{uploadsRef.current-=1;setUploading(n=>n-1);}
+  }
+ };
+ const addFiles=(event,role)=>{const files=[...event.target.files];event.target.value='';
+  if(role==='evidence'){addEvidence(files);return;}
+  run(async()=>{
+   for(const file of files){const asset=await upload(backend,file,role,product?.id);setAssets(old=>({...old,[asset.id]:asset}));if(product){const result=await api(`${base}/products/${product.id}/creative-assets`,{revision:(await api(`${base}/products/${product.id}`)).product.revision,assetId:asset.id});acceptProduct(result.product);}}
+  });};
+ // 粘贴图片：剪贴板里有 PNG / JPEG / WebP 时拦截并上传，纯文本照常粘贴。
+ const onPaste=e=>{
+  const files=[...(e.clipboardData?.items||[])].filter(item=>item.kind==='file'&&Object.hasOwn(PASTE_TYPES,item.type)).map(item=>item.getAsFile()).filter(Boolean);
+  if(!files.length)return;
+  e.preventDefault();
+  const stamp=Date.now();
+  addEvidence(files.map((file,index)=>new File([file],`粘贴图片-${stamp}-${index+1}.${PASTE_TYPES[file.type]}`,{type:file.type})));
+ };
  const save=()=>run(async()=>{const facts={};for(const row of fields){if(!row.field.trim())throw new Error('请填写资料字段名称。');if(Object.hasOwn(facts,row.field.trim()))throw new Error('资料字段名称不能重复。');facts[row.field.trim()]=row.value;}const result=await api(`${base}/products/${product.id}`,{name,facts,revision:product.revision},'PATCH');acceptProduct(result.product);notify?.('商品资料已保存');});
  const suggestion=(entry,accept)=>run(async()=>acceptProduct((await api(`${base}/products/${product.id}/suggestions/${entry.id}`,{revision:product.revision,accept})).product));
  const promote=assetId=>run(async()=>{acceptProduct((await api(`${base}/products/${product.id}/promote`,{revision:product.revision,assetId})).product);setAssets(old=>({...old,[assetId]:{...old[assetId],role:'creative'}}));});
@@ -110,17 +151,17 @@ export default function CreationProducts({backend,notify,onCreateProject,onOpenP
     {loading&&selected?<p className="cp-loading" role="status">正在加载商品…</p>:tab==='chat'?<div className="cp-chat-shell">
      <div className="cp-chat">
       <div className="cp-chat-scroll" ref={threadRef} aria-live="polite">
-       {!messages.length?<div className="cp-empty-state"><span className="cp-empty-mark" aria-hidden>AI</span><h3>从一句话开始整理商品</h3><p>直接描述商品、贴 1688 链接或上传截图。AI 会边聊边整理名称、参数、材质与卖点，随时可以开始创作。</p><div className="cp-examples">{examples.map(item=><button type="button" className="cp-example" key={item.label} onClick={()=>fillExample(item.text)}><strong>{item.label}</strong><small>{item.hint}</small></button>)}</div></div>:<div className="cp-thread">{messages.map(m=><article key={m.id} className={`cp-message cp-${m.role}`}>{m.role!=='user'&&<span className="cp-bubble-avatar" aria-hidden>AI</span>}<div className="cp-bubble"><div className="cp-message-meta"><span>{m.role==='user'?'你':'资料整理'}</span>{m.status&&<small>{m.status==='failed'?'识别未完成':m.status==='pending'?'正在识别':''}</small>}</div><p>{m.text}</p>{m.evidenceIds?.length>0&&<div className="cp-media-grid">{m.evidenceIds.map(id=>image(id))}</div>}</div></article>)}</div>}
+       {!messages.length&&!pending?<div className="cp-empty-state"><span className="cp-empty-mark" aria-hidden>AI</span><h3>从一句话开始整理商品</h3><p>直接描述商品、贴 1688 链接或上传截图。AI 会边聊边整理名称、参数、材质与卖点，随时可以开始创作。</p><div className="cp-examples">{examples.map(item=><button type="button" className="cp-example" key={item.label} onClick={()=>fillExample(item.text)}><strong>{item.label}</strong><small>{item.hint}</small></button>)}</div></div>:<div className="cp-thread">{[...messages,...(pending?[{id:'pending',role:'user',text:pending.text,evidenceIds:pending.evidenceIds}]:[])].map(m=><article key={m.id} className={`cp-message cp-${m.role}`}>{m.role!=='user'&&<span className="cp-bubble-avatar" aria-hidden>AI</span>}<div className="cp-bubble"><div className="cp-message-meta"><span>{m.role==='user'?'你':'资料整理'}</span>{m.status&&<small>{m.status==='failed'?'识别未完成':m.status==='pending'?'正在识别':''}</small>}</div><p>{m.text}</p>{m.evidenceIds?.length>0&&<div className="cp-media-grid">{m.evidenceIds.map(id=>image(id))}</div>}</div></article>)}</div>}
        {busy&&<div className="cp-typing" role="status"><span className="cp-typing-avatar" aria-hidden>AI</span><span className="cp-dots" aria-hidden><i/><i/><i/></span><span className="cp-typing-text">正在识别…</span></div>}
       </div>
       {write&&<form className="cp-composer" onSubmit={e=>{e.preventDefault();if(canSend)send();}}>
        <div className="cp-composer-shell">
-        {attachments.length>0&&<div className="cp-attachments">{attachments.map(a=><span className="cp-attachment" key={a.id}>{a.mime?.startsWith('video/')?<span className="cp-attachment-file" aria-hidden>VIDEO</span>:<img src={`${base}/assets/${a.id}/file`} alt="" loading="lazy"/>}<span className="cp-attachment-name">{a.name}</span><button type="button" className="cp-attachment-remove" aria-label={`移除 ${a.name}`} onClick={()=>{setAttachments(old=>old.filter(x=>x.id!==a.id));key.current=null;}} disabled={busy}><span aria-hidden>×</span></button></span>)}</div>}
-        <textarea ref={composerRef} aria-label="商品聊天" placeholder="补充名称、参数、材质，或上传商品截图…" rows={1} value={text} onChange={e=>{setText(e.target.value);key.current=null;}} onKeyDown={sendKey} disabled={busy}/>
+        {attachments.length>0&&<div className="cp-attachments">{attachments.map(a=><span className="cp-attachment" key={a.id}>{a.mime?.startsWith('video/')?<span className="cp-attachment-file" aria-hidden>VIDEO</span>:<img src={`${base}/assets/${a.id}/file`} alt="" loading="lazy"/>}<span className="cp-attachment-name">{a.name}</span><button type="button" className="cp-attachment-remove" aria-label={`移除 ${a.name}`} onClick={()=>{setAttachments(old=>old.filter(x=>x.id!==a.id));key.current=null;}}><span aria-hidden>×</span></button></span>)}</div>}
+        <textarea ref={composerRef} aria-label="商品聊天" placeholder="补充名称、参数、材质，或粘贴、上传商品截图…" rows={1} value={text} onChange={e=>{setText(e.target.value);key.current=null;}} onKeyDown={sendKey} onPaste={onPaste}/>
         <div className="cp-composer-tools">
-         <label className="cp-file cp-attach"><span className="cp-attach-icon" aria-hidden>+</span>添加资料图片<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={e=>addFiles(e,'evidence')} disabled={busy}/></label>
+         <label className="cp-file cp-attach"><span className="cp-attach-icon" aria-hidden>+</span>添加资料图片<input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={e=>addFiles(e,'evidence')}/></label>
          <span className="cp-composer-hint">Enter 发送 · Shift + Enter 换行</span>
-         <button type="submit" className="cp-primary cp-send" aria-label="发送资料" disabled={busy||!canSend}>{busy?'正在识别…':'发送资料'}</button>
+         <button type="submit" className="cp-primary cp-send" aria-label="发送资料" disabled={busy||uploading>0||!canSend}>{busy?'正在识别…':uploading>0?'图片上传中…':'发送资料'}</button>
         </div>
        </div>
        <p className="cp-composer-note">每条消息最多 8 张资料图片；资料图片用于识别，加入创作素材后才用于生成。</p>
