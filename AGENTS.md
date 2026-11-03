@@ -2,6 +2,11 @@
 
 更新：2026-10-23。活动范围以 `docs/FUNCTIONAL_SPEC.md` v2.0 与 `docs/requirements/creation-workbench-grilling.md` Q01—Q43 为准。状态、验证、待办及 v1 历史见 `docs/STATUS.md`。创作 v2 已部署，运行提交 b988769；5cc169e 仅补测试 / 验收，运行代码一致。精确版本、备份和回退见 docs/infrastructure/app-deployment.md。
 
+## 设计与交付原则
+
+1. 删除多余的标语、说明文字和次要标签。若删除后界面无法理解，不得用补充文案掩盖问题，应直接重新设计布局和信息层级。
+2. 每次修改都要同时改善用户体验、开发体验和 AI Agent 的使用体验，不能以牺牲任一项为代价；交付前验证现有功能未被破坏。
+
 ## 接续顺序
 
 1. 先读 `docs/README.md`、`docs/STATUS.md`，再读功能基线及全部 Q01—Q43；术语以 `GLOSSARY.md` 为准，架构取舍见 `docs/adr/`。旧四会话稿、六步专题、报价 / 预占账本 ADR 与 archive 仅作历史，不覆盖 v2。
