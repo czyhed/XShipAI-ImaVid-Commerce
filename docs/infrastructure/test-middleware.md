@@ -8,7 +8,7 @@
 
 ## 2026-10-23 创作 v2 接入维护
 
-应用已在 `https://203.0.113.10:8443` 运行创作 v2，精确提交 b988769f06eac67eb423342bec6b996beec27617；SJ_AUTH=on，4173 仅回环，0018 / 0019 已应用。TLS、健康与真实 PG / MinIO 无付费烟测通过。三个中间件继续使用下表版本、端口和账号；本次没有重建或重启中间件，没有清空共享库 / Redis / 桶。应用实际发布状态见 [STATUS](../STATUS.md) 和 [部署记录](app-deployment.md)。
+应用已在 `https://191.40.44.254:8443` 运行创作 v2，精确提交 b988769f06eac67eb423342bec6b996beec27617；SJ_AUTH=on，4173 仅回环，0018 / 0019 已应用。TLS、健康与真实 PG / MinIO 无付费烟测通过。三个中间件继续使用下表版本、端口和账号；本次没有重建或重启中间件，没有清空共享库 / Redis / 桶。应用实际发布状态见 [STATUS](../STATUS.md) 和 [部署记录](app-deployment.md)。
 
 MinIO 账号 `shangjing_app` 保留既有 `shangjing-app` 策略，新增权限仅为素材桶 `creation/*` 前缀的 `ListBucketVersions` 与 `DeleteObjectVersion`，用于 v2 手动永久删除全部版本。策略文件已更新并在服务端应用；旧策略备份 `/opt/shangjing-app/backups/creation-v2-20261022T140915Z/minio-policy.before.json`，应用账号启用与策略关联已核验。维护用 mc 显式 `SSL_CERT_FILE=/tls/CAs/ca.crt` 校验证书，不使用 `--insecure`；管理客户端临时配置和上传已清除。
 
@@ -26,14 +26,14 @@ MinIO 账号 `shangjing_app` 保留既有 `shangjing-app` 策略，新增权限�
 
 ## 实际访问地址
 
-主地址 **203.0.113.10**。**203.0.113.11 是同一服务器的另一个公网 IP**，可以连接同一套服务，两者不是主备集群。
+主地址 **191.40.44.254**。**191.40.44.235 是同一服务器的另一个公网 IP**，可以连接同一套服务，两者不是主备集群。
 
 | 服务 | 公网地址 | 实际版本 | 应用账号 | 管理账号 |
 | --- | --- | --- | --- | --- |
-| PostgreSQL | `203.0.113.10:5432`，数据库 `shangjing`，必须 TLS | 17.11 | `shangjing_app` | `postgres` |
-| Redis | `rediss://203.0.113.10:6379/0`，必须 TLS | 7.4.11 | `shangjing_app` | `admin` |
-| MinIO S3 API | `https://203.0.113.10:9000` | RELEASE.2025-10-15T17-29-55Z | `shangjing_app` | `sj_minio_admin` |
-| MinIO 控制台 | `https://203.0.113.10:9001` | 随 MinIO 构建 | 仅桶范围权限 | `sj_minio_admin` |
+| PostgreSQL | `191.40.44.254:5432`，数据库 `shangjing`，必须 TLS | 17.11 | `shangjing_app` | `postgres` |
+| Redis | `rediss://191.40.44.254:6379/0`，必须 TLS | 7.4.11 | `shangjing_app` | `admin` |
+| MinIO S3 API | `https://191.40.44.254:9000` | RELEASE.2025-10-15T17-29-55Z | `shangjing_app` | `sj_minio_admin` |
+| MinIO 控制台 | `https://191.40.44.254:9001` | 随 MinIO 构建 | 仅桶范围权限 | `sj_minio_admin` |
 
 四个端口均绑定 `0.0.0.0`，UFW 已放行对应 TCP 端口。连接仍需 TLS 和账号认证；MinIO 登录页及健康检查可以匿名访问。把地址中的 `.254` 换为 `.235` 即可访问同一数据，证书覆盖两个 IP。
 
@@ -145,7 +145,7 @@ python -m venv .venv-middleware
 
 # 验证 TLS、权限和隔离测试数据的读写，不输出密码
 .\.venv-middleware\Scripts\python.exe -u scripts/middleware/verify.py
-.\.venv-middleware\Scripts\python.exe -u scripts/middleware/verify.py --host 203.0.113.11
+.\.venv-middleware\Scripts\python.exe -u scripts/middleware/verify.py --host 191.40.44.235
 ```
 
 脚本使用临时表、随机键和随机对象，并清理它们。清理版本化 MinIO 测试对象需要本地管理凭据，业务应用不应复用管理连接。
@@ -154,7 +154,7 @@ python -m venv .venv-middleware
 
 ## SSH 与代理排障
 
-SSH 是 `root@203.0.113.10:22`，密码只在 `.secrets/server.json`。已记录的 ED25519 主机指纹：
+SSH 是 `root@191.40.44.254:22`，密码只在 `.secrets/server.json`。已记录的 ED25519 主机指纹：
 
 ```text
 SHA256:lD7yVP1YKY5rQkRfv6gaR3RLjYoffZi/O8r8B0LeXqA

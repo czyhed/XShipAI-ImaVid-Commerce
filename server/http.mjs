@@ -14,6 +14,7 @@ import {
 import { MAX_UPLOAD_BYTES } from './uploads.mjs';
 
 const staticFiles = new Map([
+  ['/logo.png', ['web/dist/logo.png', 'image/png']],
   ['/', ['web/dist/index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['web/dist/index.html', 'text/html; charset=utf-8']],
   // 旧原型保留为回退入口，React 构建产物不可用时仍可打开。

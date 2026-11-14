@@ -14,7 +14,7 @@
 
 最终窄范围复验还覆盖当前任务 ZIP 隔离、商品同步保留已开始节点快照、三图一列竖排且不调用模型。发现并修复下游节点预览触发 React #185：内容刷新不再回写选择状态，由画布统一维护选择及测量。带 / 不带适应视图的源生成 → 手选来源版本 → 下游运行均成功；连续选择、拖拽保存、任务切换与历史行选择复验通过。完整画布浏览器回归亦通过。
 
-本机独立证据目录：`系统临时目录 %TEMP%/ui-independent-qa-1c0467618add4abbb3b9c4c7d3373702/`，`report.md` 为首轮，`retest-report.md` 为修复复验，`final-narrow-report.md` 为最终追加复验；截图与运行原文保留在该目录，没有复制进仓库。以下旧版验收作为历史证据保留。
+本机独立证据目录：`C:/Users/53409/AppData/Local/Temp/ui-independent-qa-1c0467618add4abbb3b9c4c7d3373702/`，`report.md` 为首轮，`retest-report.md` 为修复复验，`final-narrow-report.md` 为最终追加复验；截图与运行原文保留在该目录，没有复制进仓库。以下旧版验收作为历史证据保留。
 
 独立 gpt-6.1-sol worktree 实际使用 Edge、生产构建、真实临时 PostgreSQL、真实 ModelHub / MinIO SDK、本地 S3 / 供应商 HTTP fixture，不连接共享业务或付费模型。结论：20 项通过、4 项部分受限，无尚未修复的已发现交互故障。
 
@@ -65,7 +65,7 @@ H3 未真实付费调用；DeepSeek 默认 text，截图需另配兼容 vision�
 
 ## 2026-10-23 线上发布与无付费烟测
 
-运行版本 `b988769f06eac67eb423342bec6b996beec27617` 已先提交推送，再按精确 SHA 构建发布至 `https://203.0.113.10:8443`。后续 `5cc169e` 仅修改测试与本文，运行代码完全一致。镜像 digest、目录及回退详见 [app-deployment.md](infrastructure/app-deployment.md)。
+运行版本 `b988769f06eac67eb423342bec6b996beec27617` 已先提交推送，再按精确 SHA 构建发布至 `https://191.40.44.254:8443`。后续 `5cc169e` 仅修改测试与本文，运行代码完全一致。镜像 digest、目录及回退详见 [app-deployment.md](infrastructure/app-deployment.md)。
 
 - 应用 healthy、4173 仅回环、nginx 配置校验与重载成功，首页和静态包使用项目 CA 校验通过；SJ_AUTH=on，匿名会话未认证且无需初始化，0018 / 0019 已应用。三个中间件未重启。
 - 维护窗口新数据库备份在隔离库恢复，旧商品 / 项目 / 生成任务 / 用户计数 6/6/6/1；清单未漂移后删除 59 条旧业务及已备份核验的 14 个对象版本，清理后 0/0/0/1，保留账号 / 配置 / 模板 / 结构。

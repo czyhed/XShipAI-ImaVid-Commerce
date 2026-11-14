@@ -4,18 +4,18 @@ from remote import SECRETS, client_ca_path
 
 credentials = json.loads((SECRETS / "middleware-admin.json").read_text())
 rows = [
-    ("PostgreSQL 应用", "203.0.113.10:5432 / shangjing", "shangjing_app", "POSTGRES_APP_PASSWORD"),
-    ("PostgreSQL 管理", "203.0.113.10:5432 / postgres", "postgres", "POSTGRES_ADMIN_PASSWORD"),
-    ("Redis 应用", "203.0.113.10:6379 / DB 0", "shangjing_app", "REDIS_APP_PASSWORD"),
-    ("Redis 管理", "203.0.113.10:6379 / DB 0", "admin", "REDIS_ADMIN_PASSWORD"),
-    ("MinIO 应用", "https://203.0.113.10:9000", "shangjing_app", "MINIO_APP_PASSWORD"),
-    ("MinIO 管理/控制台", "https://203.0.113.10:9001", "sj_minio_admin", "MINIO_ADMIN_PASSWORD"),
+    ("PostgreSQL 应用", "191.40.44.254:5432 / shangjing", "shangjing_app", "POSTGRES_APP_PASSWORD"),
+    ("PostgreSQL 管理", "191.40.44.254:5432 / postgres", "postgres", "POSTGRES_ADMIN_PASSWORD"),
+    ("Redis 应用", "191.40.44.254:6379 / DB 0", "shangjing_app", "REDIS_APP_PASSWORD"),
+    ("Redis 管理", "191.40.44.254:6379 / DB 0", "admin", "REDIS_ADMIN_PASSWORD"),
+    ("MinIO 应用", "https://191.40.44.254:9000", "shangjing_app", "MINIO_APP_PASSWORD"),
+    ("MinIO 管理/控制台", "https://191.40.44.254:9001", "sj_minio_admin", "MINIO_ADMIN_PASSWORD"),
 ]
 text = """# 测试中间件访问账号（本地私密文件）
 
 不要提交 Git、复制到公开文档或打印到自动化日志。
 
-主地址：203.0.113.10。203.0.113.11 是同一台服务器的另一个 IP，两者不是主备集群。
+主地址：191.40.44.254。191.40.44.235 是同一台服务器的另一个 IP，两者不是主备集群。
 
 所有服务通过公网 TLS 访问。各密码独立，以 32 字节随机数生成（256 位随机熵）。
 

@@ -1,5 +1,15 @@
 # 实现状态与变更记录
 
+## 2026-11-01 XShipAI 测试副本图片 Logo
+
+按用户反馈使用简洁的绿色扁平购物袋 PNG，源文件为 `web/public/logo.png`，同步顶部导航、登录页、favicon 与 XShipAI 工作台商境入口。代码 `242a378` 已推送 GitHub main。构建通过，独立浏览器验收确认顶部 Logo、favicon、375px 窄屏正常，线上 PNG 与源文件及工作台副本 SHA-256 一致；仅更新应用镜像，业务数据、模型渠道和后台任务保持不变。部署及回退见 [XShipAI 部署说明](../infra/xshipai/README.md)，设计提示词见 [Logo 记录](brand-logo.md)。
+
+## 2026-10-31 XShipAI 组织测试副本
+
+后续按用户要求，从原 `191.40.44.254:8443` 商境只读复制 4 个模型渠道、6 条模型目录及 5 项默认设置（包括视频和语音），密钥在新环境重新加密。逐项配置比对与认证后目录读取通过，旧项目保留且配置未改变。目标备份及当前默认设置见 [部署说明](../infra/xshipai/README.md)。没有进行付费生成。
+
+已将源仓库同步至私有 `xshipai/agent-project`，以 `fc150c6` 的业务代码部署至 XShipAI 工作台；新增部署工具和说明见 [infra/xshipai](../infra/xshipai/README.md)。通过桌面“商境”图标访问，使用独立数据库与私有素材存储，现有源环境保持不变。396 项测试、构建、六应用访问保护和商境数据/素材烟测通过；文本与生图配置复用已有授权，未进行付费生成。
+
 更新：2026-10-27。业务边界以 [FUNCTIONAL_SPEC.md v2.0](FUNCTIONAL_SPEC.md) 与 [Q01—Q43](requirements/creation-workbench-grilling.md) 为准；本次用户要求全站按 B 版效果图修改，项目页采用最新任务画布。代码实现、隔离验收与服务器实况分别记录。
 
 ## 2026-10-27 列表分页（未部署）
@@ -49,7 +59,7 @@
 
 ## 当前版本与发布边界
 
-- **创作 v2 + 全站 B 版已部署**：`https://203.0.113.10:8443`，运行提交 `d2cd6df`（2026-10-26，含项目保存及视频参数修复）。先提交推送，再按精确 SHA 构建发布；后续部署记录提交仅含文档。此前运行版本依次为 `2a0a89d`、`5d1eb6a`。镜像、目录、备份和回退见 [app-deployment.md](infrastructure/app-deployment.md)。
+- **创作 v2 + 全站 B 版已部署**：`https://191.40.44.254:8443`，运行提交 `d2cd6df`（2026-10-26，含项目保存及视频参数修复）。先提交推送，再按精确 SHA 构建发布；后续部署记录提交仅含文档。此前运行版本依次为 `2a0a89d`、`5d1eb6a`。镜像、目录、备份和回退见 [app-deployment.md](infrastructure/app-deployment.md)。
 - 活动前端为 `web/src` 的 Creation 五菜单，项目进入浅色 React Flow 任务画布：左侧创作任务、节点内编辑、当前任务运行记录、缩放控件与小地图；商品页为聊天优先；活动接口 `/api/creation/*`、`/api/model-hub`。报价、充值、余额预扣及强制候选 / 审核 / 六步交付已退出活动创作，旧业务 API 返回 `410 LEGACY_RETIRED`。
 - B 版首发线上验证（历史）：应用 healthy，HTTPS 项目 CA 校验、首页 / JS / CSS / 登录配图 200；临时管理员会话读取十组接口与已有项目详情 200，未登录 401、缺 CSRF 写请求 403。维护会话已删除；发布前后商品 / 项目 / 素材 / 模板 / 运行 / 用户计数均为 `5 / 6 / 37 / 20 / 16 / 1`。中间件与其他服务未重启。
 - 独立 gpt-6.1-sol worktree QA、三轴审查及后续窄范围复审已完成；确认问题均已修复，最后的连接获取失败补偿测试缺口已在 `5cc169e` 补齐。独立 QA 部分受限分支及审查范围见 [CREATION_ACCEPTANCE.md](CREATION_ACCEPTANCE.md)。
@@ -180,7 +190,7 @@ SQL fixture 只创建并清理自身随机端口 / 随机凭据 PostgreSQL 容�
 | 日期 | 变更 | 状态 |
 | --- | --- | --- |
 | 2026-10-22 | 完成度审计与主流程优化（详见 [PROJECT_COMPLETION_PLAN.md](PROJECT_COMPLETION_PLAN.md)）：统一详情 / 列表 / 工作台生命周期；成功输出幂等登记 draft，登记失败只重试免费节点；真实实例开跑前编辑参数 / 布局 / 连线 / 安全改图节点与另存模板，冲突及窄屏保留草稿；项目 / 商品深链、跨页详情与对象 URL 恢复；慢响应与懒加载恢复、页面分包。修复确认 / 保存竞态、延迟索引重复版本、SQL updated_at 重复赋值，以及重复确认 / 跨运行同键 / 后续预占失败时的共享费用补偿 | 最终 `npm test` 253/253，`check`、`build` 通过；独立临时 PostgreSQL 18/18，11 个浏览器脚本通过（API 全模拟）；独立 QA 为 Passes with gaps，三轴本机审查原问题已关闭。主 JS 252.15 kB、项目页 268.35 kB。未取得宿主家族元数据，未执行外部跨家族评审。未调用真实供应商、未产生付费任务、未写共享服务或部署；真实完整链路、DB 异常 / commit-unknown / 重启对账仍待验收 |
-| 2026-10-21 | 部署应用到测试服务器：发布 `main` `3d8307c`（项目交付 #25、系统真实接口 #29、素材真实索引与既有真实生图 / 商品 / 项目流程）。部署前对 PostgreSQL 执行 `pg_dump` 备份到 `/opt/shangjing-app/backups/`；重建 Docker 镜像并以 `shangjing-app` Compose 项目滚动替换，容器健康检查与 nginx reload 通过 | 服务器侧 `curl --cacert` 访问 `https://203.0.113.10:8443/` 返回 200；管理员登录后会话、模型、任务、项目、商品、素材、账本、价格、审计、成员与工作台接口全部 200；本地公网直连受 Clash TUN 影响，验证经 SSH 端口转发完成，未在服务器留存密码，未创建付费任务 |
+| 2026-10-21 | 部署应用到测试服务器：发布 `main` `3d8307c`（项目交付 #25、系统真实接口 #29、素材真实索引与既有真实生图 / 商品 / 项目流程）。部署前对 PostgreSQL 执行 `pg_dump` 备份到 `/opt/shangjing-app/backups/`；重建 Docker 镜像并以 `shangjing-app` Compose 项目滚动替换，容器健康检查与 nginx reload 通过 | 服务器侧 `curl --cacert` 访问 `https://191.40.44.254:8443/` 返回 200；管理员登录后会话、模型、任务、项目、商品、素材、账本、价格、审计、成员与工作台接口全部 200；本地公网直连受 Clash TUN 影响，验证经 SSH 端口转发完成，未在服务器留存密码，未创建付费任务 |
 | 2026-10-21 | 素材页接入真实素材索引（#4）：新增 `web/src/lib/assets-api.js`，集中只读 GET `/api/assets`、`/api/assets/:id`、`/versions` 与同源图片 / 下载地址，中文错误透传，GET 不带 CSRF；`Assets.jsx` 移除对 `backend.jobs`「最近 50 个任务」的读取与横幅，改为进入素材标签后懒加载第一页、展示汇总、防抖搜索、服务端支持的来源筛选、游标加载更多、刷新保留筛选、真实图片懒加载与 410/404「文件缺失，记录仍保留」、详情元数据 / 提示词 / 版本链 / 下载、错误可重试与 viewer 只读；「引用到项目草稿」保留但明确素材自动带入尚未接入，不自动生成或计费。同步新增 `tests/assets-real-browser.mjs` 并更新本文素材行与测试表。另注：`docs/FUNCTIONAL_SPEC.md` 第 399 行仍写 `/:id/file`、`/:id/thumb`，与已实现的 `/:id/image`、`/:id/download` 不同，以实际路由为准；本次未改基线 | `npm test` 241/241、`npm run check`、`npm run build` 通过；`node tests/assets-real-browser.mjs` 4 个场景通过（列表与汇总、搜索 / 筛选 / 游标、详情与版本链 / 410 缺文件、错误重试、viewer 只读、模板与 390px），全部 `/api/**` 模拟且无写请求；`templates-browser`、`review-browser`、`products-browser` 通过（均不产生付费任务）。未改服务端行为、未新增 npm 依赖、未提交密钥 |
 | 2026-10-21 | 商品原图在登录模式下可用（#9 收口）：生产注入的单一 `ProductImageApi`（工作空间 `local`）改为按会话 `forWorkspace(workspaceId)` 派生，修复登录后上传原图被判「商品不存在」、执行器读不到原图的问题；协议登记（迁移 0017 落在 `local`）作为应用级证据回退读取，启用状态仍按工作空间独立保存。生图页参考图区新增「商品原图」：读取真实商品与已登记原图，选择时先调用 `/api/product-images/preflight`，提交只携带 `sourceAssetId`，图片字节由服务端从私有 MinIO 读取；只读角色禁用入口。部署环境真实验收：256×256 PNG 原图上传 → 启用 `omyai-openai` → preflight `allowed:true` → low 质量改图任务 `c43de04f-9775-4382-adfc-2d23c3c6ad7e` 成功、下载 800,484 字节 PNG | `npm test` 238/238（新增 `tests/image-input-scope.test.mjs` 3 项、注入作用域测试 1 项与素材作用域测试 2 项）、`npm run check`、`npm run build`、`node tests/browser-smoke.mjs`（含原图选择与提交体断言，全部模拟）通过；真实改图计费 1 次，未重试 |
 | 2026-10-21 | 交付界面与模板带入接入真实 API（#25）：`web/src/lib/project-api.js` 新增版本链 / 精修 / 审核 / 导出方法、中文标签与查询串；`ProjectPage.jsx` 第 04 步改为真实版本表、手工导入成功任务编号、显式选候选、三条精修路径「估价 → 确认」（模板重排 0 元、付费路径需勾选）、unknown 只核实原任务、返修理由；第 05 步仅对当前候选发起审核、四项逐项保存、四项全通过才能批准、撤销理由 1–500 字并回 04；第 06 步展示交付项就绪与缺项、未全批准必须显式接受部分交付、用幂等键创建导出、列出历史并通过真实下载接口取 ZIP。所有写操作带 CSRF、`If-Match` 与幂等键，428/409 提示刷新，无自动重试 / 换模型 / 确认 / 生成 / 计费；viewer 只读。`Assets.jsx` 模板带入改为读取真实项目与草稿方案，选择交付项后 PATCH 方案并显示来源模板 id/版本，已确认 / 无方案 / 无交付项 / viewer 明确拒绝，不自动确认、生成或计费；`App.jsx` 移除本地模板带入函数。未修改服务端行为，未新增依赖 | `npm run build`、`npm run check`、`npm test` 232/232 通过；新增 `node tests/delivery-real-browser.mjs` 4 个场景（04/05/06 正常链路、候选 ETag 冲突、viewer 只读、390px 无横向溢出）通过，全部 API 模拟并校验 CSRF / `If-Match` / 幂等键；`templates-browser` 改为验证真实方案 PATCH 与守卫并通过；`project-real-browser`、`review-browser`、`products-real-browser`、`products-browser`、`dashboard-browser` 通过；`auth-browser` 仍因旧演示项目「秋日上新」断言失败，属既有问题，未在本分支修改。不连接数据库、不写 MinIO、不产生付费任务 |

@@ -22,12 +22,12 @@
 部署时必须在 `.env.app` 中提供：
 
 ```dotenv
-SJ_ALLOWED_HOSTS=203.0.113.10:8443,203.0.113.11:8443
-SJ_PUBLIC_ORIGIN=https://203.0.113.10:8443
+SJ_ALLOWED_HOSTS=191.40.44.254:8443,191.40.44.235:8443
+SJ_PUBLIC_ORIGIN=https://191.40.44.254:8443
 ```
 
-nginx 使用 `Host $http_host` 保留端口，否则应用只看到 `203.0.113.10`，
-与浏览器发送的 `Origin: https://203.0.113.10:8443` 不一致，写操作会被 `ORIGIN_DENIED` 拒绝。
+nginx 使用 `Host $http_host` 保留端口，否则应用只看到 `191.40.44.254`，
+与浏览器发送的 `Origin: https://191.40.44.254:8443` 不一致，写操作会被 `ORIGIN_DENIED` 拒绝。
 
 如果后续修改为不带端口比较，请同步调整 `.env.app` 与本文档，避免两处规则漂移。
 

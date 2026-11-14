@@ -82,8 +82,8 @@
     "offsite_copy": false,
     "restore_drill": false
   },
-  "primary_host": "203.0.113.10",
-  "same_server_alternate_ip": "203.0.113.11",
+  "primary_host": "191.40.44.254",
+  "same_server_alternate_ip": "191.40.44.235",
   "deployment_path": "/opt/shangjing-middleware",
   "compose_project": "shangjing-middleware",
   "versions": {

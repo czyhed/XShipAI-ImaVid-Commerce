@@ -1,6 +1,6 @@
 # 商境应用生产部署
 
-更新日期：2026-10-26。本文描述把「商境」Node 服务以容器方式部署到 **203.0.113.10**
+更新日期：2026-10-26。本文描述把「商境」Node 服务以容器方式部署到 **191.40.44.254**
 的方案与操作步骤。工件位于 [`infra/app/`](../../infra/app/)，本文不包含任何真实密码、
 连接串或密钥；实际值只存在于服务器 `/opt/shangjing-app/.env.app` 与既有中间件凭据目录。
 
@@ -13,7 +13,7 @@ nginx 1.30.5（宝塔，vhost 目录 `/www/server/panel/vhost/nginx/`），**未
 8443 与 4173 端口空闲。UFW 当前放行 22/80/443/5432/6379/9000/9001，**未放行 8443**。
 项目 CA 为 `/opt/shangjing-middleware/tls/authority/ca.crt|ca.key`
 （CN `Shangjing Test Middleware CA`，pathlen 0），既有证书 SAN 覆盖
-`203.0.113.11`、`203.0.113.10`、`127.0.0.1`、`localhost`。
+`191.40.44.235`、`191.40.44.254`、`127.0.0.1`、`localhost`。
 
 ## 当前发布：取消待核实（2026-10-28）
 
@@ -165,7 +165,7 @@ nginx 1.30.5（宝塔，vhost 目录 `/www/server/panel/vhost/nginx/`），**未
 
 ## 历史 v2 发布记录（2026-10-23）
 
-创作 v2 已上线 `https://203.0.113.10:8443`。原先的端口空闲 / 防火墙未开放描述仅为首次部署历史；当前 8443 已开放，4173 仅宿主回环。完整验收范围与部分受限分支见 [CREATION_ACCEPTANCE.md](../CREATION_ACCEPTANCE.md)。
+创作 v2 已上线 `https://191.40.44.254:8443`。原先的端口空闲 / 防火墙未开放描述仅为首次部署历史；当前 8443 已开放，4173 仅宿主回环。完整验收范围与部分受限分支见 [CREATION_ACCEPTANCE.md](../CREATION_ACCEPTANCE.md)。
 
 | 项目 | 本次实际结果 |
 | --- | --- |
@@ -217,7 +217,7 @@ MinIO 应用账号仍为 `shangjing_app`，既有 `shangjing-app` 策略仅增�
 
 | 项 | 值 |
 | --- | --- |
-| 公网入口 | `https://203.0.113.10:8443`、`https://203.0.113.11:8443`（同一台服务器） |
+| 公网入口 | `https://191.40.44.254:8443`、`https://191.40.44.235:8443`（同一台服务器） |
 | nginx vhost | `/www/server/panel/vhost/nginx/shangjing-app.conf` |
 | 应用容器 | Compose 项目 `shangjing-app`，容器名 `shangjing-app` |
 | 应用监听 | 宿主 `127.0.0.1:4173`，公网不可直接访问 |
@@ -274,8 +274,8 @@ MinIO 应用账号仍为 `shangjing_app`，既有 `shangjing-app` 策略仅增�
 
 - `SJ_AUTH=on`（生产必须开启登录）；
 - `SJ_ALLOWED_HOSTS` 含浏览器地址栏的 **host:port**，例如
-  `203.0.113.10:8443,203.0.113.11:8443`；
-- `SJ_PUBLIC_ORIGIN=https://203.0.113.10:8443`；
+  `191.40.44.254:8443,191.40.44.235:8443`；
+- `SJ_PUBLIC_ORIGIN=https://191.40.44.254:8443`；
 - `PGHOST`、`PGUSER`、`PGPASSWORD`、`MIDDLEWARE_CA_CERT=/run/shangjing/ca.crt`；
 - `MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`；
 - `OMYAI_API_KEY`、`DEEPSEEK_API_KEY`、`MINIMAX_H3_API_KEY`；新执行器安全直连，不读取旧 `MODEL_HTTPS_PROXY`；
@@ -333,11 +333,11 @@ APP_DIR=/opt/shangjing-app bash /opt/shangjing-app/src/infra/app/deploy.sh
 
 ```sh
 # 本机执行；保持隧道开启
-ssh -L 4173:127.0.0.1:4173 root@203.0.113.10
+ssh -L 4173:127.0.0.1:4173 root@191.40.44.254
 # 浏览器打开 http://127.0.0.1:4173 ，填写管理员邮箱、密码、工作空间名称
 ```
 
-初始化成功后关闭隧道，再访问 `https://203.0.113.10:8443` 登录。密码至少 10 位；
+初始化成功后关闭隧道，再访问 `https://191.40.44.254:8443` 登录。密码至少 10 位；
 后续管理员新增的成员首次登录会被要求改密。管理员、运营、只读三种角色的权限由服务端逐接口校验。
 
 如果 vhost 已安装而尚未初始化，仍可用上述隧道完成，不需要停 nginx。
@@ -408,7 +408,7 @@ curl -fsS http://127.0.0.1:4173/ >/dev/null && echo app-loopback-ok
 # 经 nginx + 项目 CA 验证（不带 -k，必须校验证书）
 curl --fail --silent --show-error \
   --cacert /opt/shangjing-app/tls/authority/ca.crt \
-  https://203.0.113.10:8443/ >/dev/null && echo nginx-tls-ok
+  https://191.40.44.254:8443/ >/dev/null && echo nginx-tls-ok
 
 # 证书 SAN 与有效期（不输出私钥）
 openssl x509 -in /opt/shangjing-app/tls/server.crt -noout \
@@ -421,7 +421,7 @@ openssl x509 -in /opt/shangjing-app/tls/server.crt -noout \
 docker logs --tail 200 shangjing-app
 ```
 
-浏览器访问 `https://203.0.113.10:8443` 前，需要把项目 CA
+浏览器访问 `https://191.40.44.254:8443` 前，需要把项目 CA
 （`ca.crt`，SHA-256 指纹见 test-middleware.md）导入操作系统或浏览器的受信任根证书；
 否则会出现证书警告。客户端命令行使用 `--cacert`，不要用 `-k` 关闭校验。
 
@@ -434,7 +434,7 @@ docker logs --tail 200 shangjing-app
 | 2026-10-25（晚） | `main` `d75cdc0`：B 版蓝色 UI 重做（theme.css 顶部导航设计系统，替换 base.css）、画布 v4（维度标签 / 整理布局 / 来源版本选择 / 队列计数与耗时格式）、视频工作台（脚本 → 分镜 → 逐镜 → ffmpeg 成片拼接，storyboard 存项目 JSONB）与 `server/video-compile.mjs`；Dockerfile 运行层安装 ffmpeg；测试基线升至 290/290、65/65 | 部署前备份 `/opt/shangjing-app/backups/pre-deploy-20261025T144607Z.sql`（496,288 字节，含完成标记）；源码归档（SHA-256 `48efd2db…`）上传核对后解压至 `releases/d75cdc0…`，`docker build -f infra/app/Dockerfile`（上下文为发布目录）构建 `shangjing/app:d75cdc0…` 并同步 `latest` 标签，`.env.app` 以 600 复制进发布目录供 compose `env_file` 解析；容器 healthy，回环 200，HTTPS 经项目 CA 200，`/api/session` 200、`/api/creation/projects` 与 `/api/model-hub` 401、storyboard 写路由无 CSRF 返回 403；`CreationProjects.js` 含「视频工作台 / 整理布局」标记；容器内 ffmpeg 5.1.9；未创建付费任务 |
 | 2026-10-23 | `main` `8bd6165`：自由节点画布 v3（八类节点、类型化连线、任务队列、节点级重试、浏览器内合成）、商品对话优先、工作台实时队列、旧组件下线 | 部署前 `pg_dump` 备份至 `/opt/shangjing-app/backups/pre-deploy-20261023T083836Z.sql`（352,941 字节，含完成标记）；镜像重建、容器 healthy、回环健康检查通过；HTTPS 首页 200；`GET /api/session` 200，`/api/creation/projects`、`/api/model-hub` 401；`CreationProjects.js` 213,413 字节且含「添加节点 / 任务队列 / 重试全部失败」；未创建付费任务。用户确认后执行 `server/scripts/creation-reset-projects.mjs --yes`：删除 12 个旧项目、15 条运行记录、5 条回收站记录，保留商品、素材、模板、账号与模型配置 |
 | 2026-10-22 | `main` `16c693c`：项目工作流开跑前编辑与另存模板、详情 / 列表 / 工作台生命周期统一、确认与保存竞态修复、并发预占补偿、页面分包懒加载与 PostgreSQL 集成测试 | 部署前 `pg_dump` 备份至 `/opt/shangjing-app/backups/pre-deploy-20261022T114524Z.sql`（174,811 字节，含 `PostgreSQL database dump complete`）；镜像重建、容器 healthy、回环 `GET /` 健康检查通过；服务器侧 `curl --cacert` 首页 200；`GET /api/session` 200，`GET /api/projects`、`/api/models` 401（鉴权生效）；`/assets/app.js` 252,152 字节，分包 `/assets/ProjectPage.js` 268,354 字节且含 `edit-workflow`，经 HTTPS 200；未创建付费任务 |
-| 2026-10-21 | `main` `3d8307c`：项目列表 / 六步 / 04 精修候选 / 05 审核 / 06 导出（#27/#25）、商品真实接口（#28）、系统成员 / 账本 / 审计 / 价格（#29）、素材真实索引、商品原图改图入口 | 部署前 `pg_dump` 备份至 `/opt/shangjing-app/backups/`；镜像重建、容器 healthy、`deploy.sh` 回环健康检查通过；服务器侧 `curl --cacert` 访问 `https://203.0.113.10:8443/` 返回 200；管理员登录后 `GET /api/session`、`/api/models`、`/api/jobs`、`/api/projects`、`/api/products`、`/api/assets`、`/api/billing`、`/api/billing/ledger`、`/api/billing/prices`、`/api/audit-logs`、`/api/users`、`/api/dashboard` 均为 200；`/assets/app.js` 正常返回。验证经 SSH 端口转发完成，未在服务器留存密码，未创建付费任务 |
+| 2026-10-21 | `main` `3d8307c`：项目列表 / 六步 / 04 精修候选 / 05 审核 / 06 导出（#27/#25）、商品真实接口（#28）、系统成员 / 账本 / 审计 / 价格（#29）、素材真实索引、商品原图改图入口 | 部署前 `pg_dump` 备份至 `/opt/shangjing-app/backups/`；镜像重建、容器 healthy、`deploy.sh` 回环健康检查通过；服务器侧 `curl --cacert` 访问 `https://191.40.44.254:8443/` 返回 200；管理员登录后 `GET /api/session`、`/api/models`、`/api/jobs`、`/api/projects`、`/api/products`、`/api/assets`、`/api/billing`、`/api/billing/ledger`、`/api/billing/prices`、`/api/audit-logs`、`/api/users`、`/api/dashboard` 均为 200；`/assets/app.js` 正常返回。验证经 SSH 端口转发完成，未在服务器留存密码，未创建付费任务 |
 
 ## 已知风险与限制
 

@@ -9,7 +9,7 @@ function Brand({ children, screen, headline = ['让商品', '被看见。'] }) {
   return (
     <div className="auth-shell" data-auth-screen={screen}>
       <section className="auth-brand" aria-label="商境">
-        <div className="auth-logo">商境</div>
+        <div className="auth-logo"><img src="/logo.png" alt="商境" width={64} height={64} style={{objectFit:"contain"}}/></div>
         <div className="auth-brand-copy">
 
           <h1>{screen==='setup'?'创建你的工作空间':'让商品被看见'}</h1>

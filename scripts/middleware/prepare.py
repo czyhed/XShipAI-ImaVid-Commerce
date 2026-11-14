@@ -47,8 +47,8 @@ def make_certificates():
                 .not_valid_before(now - dt.timedelta(minutes=10)).not_valid_after(now + dt.timedelta(days=365))
                 .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
                 .add_extension(x509.SubjectAlternativeName([
-                    x509.IPAddress(ipaddress.ip_address("203.0.113.11")),
-                    x509.IPAddress(ipaddress.ip_address("203.0.113.10")),
+                    x509.IPAddress(ipaddress.ip_address("191.40.44.235")),
+                    x509.IPAddress(ipaddress.ip_address("191.40.44.254")),
                     x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
                     x509.DNSName("localhost"), x509.DNSName(name)]), critical=False)
                 .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
@@ -87,15 +87,15 @@ def main():
     }
     env_content = "".join(f"{k}={v}\n" for k, v in {**image_env, **credentials}.items())
     app = {
-        "PGHOST": "203.0.113.10", "PGPORT": "5432", "PGDATABASE": "shangjing", "PGUSER": "shangjing_app",
+        "PGHOST": "191.40.44.254", "PGPORT": "5432", "PGDATABASE": "shangjing", "PGUSER": "shangjing_app",
         "PGPASSWORD": credentials["POSTGRES_APP_PASSWORD"], "PGSSLMODE": "verify-full",
         "PGSSLROOTCERT": client_ca.as_posix(),
-        "DATABASE_URL": f"postgresql://shangjing_app:{credentials['POSTGRES_APP_PASSWORD']}@203.0.113.10:5432/shangjing?sslmode=verify-full",
-        "REDIS_URL": f"rediss://shangjing_app:{credentials['REDIS_APP_PASSWORD']}@203.0.113.10:6379/0",
+        "DATABASE_URL": f"postgresql://shangjing_app:{credentials['POSTGRES_APP_PASSWORD']}@191.40.44.254:5432/shangjing?sslmode=verify-full",
+        "REDIS_URL": f"rediss://shangjing_app:{credentials['REDIS_APP_PASSWORD']}@191.40.44.254:6379/0",
         "REDIS_USERNAME": "shangjing_app", "REDIS_PASSWORD": credentials["REDIS_APP_PASSWORD"],
         "REDIS_KEY_PREFIX": "sj:", "MIDDLEWARE_CA_CERT": client_ca.as_posix(),
         "NODE_EXTRA_CA_CERTS": client_ca.as_posix(),
-        "MINIO_ENDPOINT": "https://203.0.113.10:9000", "MINIO_REGION": "us-east-1",
+        "MINIO_ENDPOINT": "https://191.40.44.254:9000", "MINIO_REGION": "us-east-1",
         "MINIO_ACCESS_KEY": "shangjing_app", "MINIO_SECRET_KEY": credentials["MINIO_APP_PASSWORD"],
         "MINIO_BUCKET_ASSETS": "shangjing-assets", "MINIO_BUCKET_EXPORTS": "shangjing-exports",
     }

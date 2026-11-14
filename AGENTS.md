@@ -2,11 +2,6 @@
 
 更新：2026-10-23。活动范围以 `docs/FUNCTIONAL_SPEC.md` v2.0 与 `docs/requirements/creation-workbench-grilling.md` Q01—Q43 为准。状态、验证、待办及 v1 历史见 `docs/STATUS.md`。创作 v2 已部署，运行提交 b988769；5cc169e 仅补测试 / 验收，运行代码一致。精确版本、备份和回退见 docs/infrastructure/app-deployment.md。
 
-## 设计与交付原则
-
-1. 删除多余的标语、说明文字和次要标签。若删除后界面无法理解，不得用补充文案掩盖问题，应直接重新设计布局和信息层级。
-2. 每次修改都要同时改善用户体验、开发体验和 AI Agent 的使用体验，不能以牺牲任一项为代价；交付前验证现有功能未被破坏。
-
 ## 接续顺序
 
 1. 先读 `docs/README.md`、`docs/STATUS.md`，再读功能基线及全部 Q01—Q43；术语以 `GLOSSARY.md` 为准，架构取舍见 `docs/adr/`。旧四会话稿、六步专题、报价 / 预占账本 ADR 与 archive 仅作历史，不覆盖 v2。
@@ -25,7 +20,7 @@
 
 ## 凭据与基础设施约束
 
-- 复用已部署 PostgreSQL、Redis、MinIO；203.0.113.10 与 203.0.113.11 是同机两公网 IP，不是主备。用户授权公网直连，必须 TLS、项目 CA、独立应用账号；中间件证书 2027-10-19 到期，应用 8443 证书 2027-11-22 到期。端口 / 目录冲突先核查，保留其他服务与持久数据。
+- 复用已部署 PostgreSQL、Redis、MinIO；191.40.44.254 与 191.40.44.235 是同机两公网 IP，不是主备。用户授权公网直连，必须 TLS、项目 CA、独立应用账号；中间件证书 2027-10-19 到期，应用 8443 证书 2027-11-22 到期。端口 / 目录冲突先核查，保留其他服务与持久数据。
 - 应用配置 .env.middleware.local，账号表 .secrets/middleware-access.local.md，管理密码 .secrets/middleware-admin.json，SSH .secrets/server.json，模型配置 .env.models.local。仅任务必要且授权范围内读取；密码 / Key / 完整连接串不打印、提交 Git 或写公开文档。换电脑安全迁移凭据 / CA 并更新路径。
 - 动态 Key AES-256-GCM 加密存 sj_model_channels，浏览器仅末四位掩码，提交不入 localStorage / URL / 日志。32 字节 .secrets/channel-encryption.key（首次生成，或 CHANNEL_ENCRYPTION_KEY 覆盖）必须随数据库安全备份，丢失则动态 Key 不可恢复。config/providers.json 仅公开配置。
 - Redis 键 / 频道前缀 sj:，BullMQ prefix sj:bullmq；MinIO 仅私有 shangjing-assets / shangjing-exports。浏览器不持有服务密码 / 长期 MinIO Key。服务端读字节上传供应商，不假定其信任私有 CA，不交付私有 MinIO URL；外链逐跳校验公网 DNS / 地址、体积与媒体签名。
@@ -37,7 +32,7 @@
 
 ### Issue tracker
 
-Issues 记录在 GitHub `czyhed/ImavidAgent`，通过 `gh` CLI 操作。See `docs/agents/issue-tracker.md`.
+Issues 记录在 GitHub `leifengyang/agent-project`，通过 `gh` CLI 操作。See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

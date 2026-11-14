@@ -17,7 +17,7 @@
 
 五菜单为工作台 / 项目 / 商品 / 素材 / 系统。活动 React Creation 页面连接 `/api/creation/*` 与 `/api/model-hub`：长期商品聊天、独立创作素材、项目 React Flow 无限画布、AI 建议与手动开始、具体版本选择、图片 / H3 视频执行器、持久模板与回收站。报价、充值、余额预扣及强制候选 / 审核 / 六步交付已退出活动入口。
 
-**当前运行 `2a0a89d`，入口 `https://203.0.113.10:8443`。** 全站 B 版与任务画布于 2026-10-26 更新；`npm test` 293/293、`test:creation` 67/67、五套浏览器及 check / build 通过，独立交互复验通过。部署前备份及隔离恢复通过，线上 TLS、静态资源、会话鉴权与已有业务读取验证通过；本次保留全部业务数据，未执行历史清理或付费生成。详见 [STATUS](STATUS.md)、[验收记录](CREATION_ACCEPTANCE.md) 和 [应用部署](infrastructure/app-deployment.md)。
+**当前运行 `2a0a89d`，入口 `https://191.40.44.254:8443`。** 全站 B 版与任务画布于 2026-10-26 更新；`npm test` 293/293、`test:creation` 67/67、五套浏览器及 check / build 通过，独立交互复验通过。部署前备份及隔离恢复通过，线上 TLS、静态资源、会话鉴权与已有业务读取验证通过；本次保留全部业务数据，未执行历史清理或付费生成。详见 [STATUS](STATUS.md)、[验收记录](CREATION_ACCEPTANCE.md) 和 [应用部署](infrastructure/app-deployment.md)。
 
 H3 未做真实付费调用；截图识别需兼容 vision 模型，DeepSeek 启动默认仅 text；供应商安全传输仅直连。备份目前同盘，异机副本仍待安全迁移。
 

@@ -55,14 +55,14 @@ distinguished_name = dn
 prompt = no
 
 [dn]
-CN = 203.0.113.10
+CN = 191.40.44.254
 O = Shangjing
 
 [ext]
 basicConstraints = critical,CA:FALSE
 keyUsage = critical,digitalSignature,keyEncipherment
 extendedKeyUsage = serverAuth
-subjectAltName = IP:203.0.113.10,IP:203.0.113.11,IP:127.0.0.1,DNS:localhost
+subjectAltName = IP:191.40.44.254,IP:191.40.44.235,IP:127.0.0.1,DNS:localhost
 EOF
 
 "$OPENSSL" req -new -newkey rsa:3072 -nodes \

@@ -162,7 +162,7 @@ def persistence(host, mode):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="203.0.113.10")
+    parser.add_argument("--host", default="191.40.44.254")
     parser.add_argument("--services", nargs="+", choices=["postgres", "redis", "minio"], default=["postgres", "redis", "minio"])
     parser.add_argument("--mode", choices=["smoke", "seed", "check-cleanup"], default="smoke")
     args = parser.parse_args()

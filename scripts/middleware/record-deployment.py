@@ -44,7 +44,7 @@ finally:
 ca = x509.load_pem_x509_certificate((SECRETS / "tls/ca.crt").read_bytes())
 leaf = x509.load_pem_x509_certificate((SECRETS / "tls/minio.crt").read_bytes())
 record.update({
-    "primary_host": "203.0.113.10", "same_server_alternate_ip": "203.0.113.11",
+    "primary_host": "191.40.44.254", "same_server_alternate_ip": "191.40.44.235",
     "deployment_path": "/opt/shangjing-middleware", "compose_project": "shangjing-middleware",
     "versions": {"postgresql": "17.11", "redis": "7.4.11", "minio": "RELEASE.2025-10-15T17-29-55Z", "minio_build_go": "1.26.9"},
     "ca_sha256_fingerprint": ca.fingerprint(hashes.SHA256()).hex(),
