@@ -9,7 +9,7 @@ function revisionBody(req, body = {}) {
  const header = String(req?.headers?.['if-match'] || '').match(/^(?:W\/)?"?(?:r|v)?(\d+)"?$/);
  return header ? { ...body, revision: Number(header[1]) } : body;
 }
-const projectAction = /^\/api\/creation\/projects\/([\da-f-]{36})\/voice\/(dialogue|remix)$/i;
+const projectAction = /^\/api\/creation\/projects\/([\da-f-]{36})\/voice\/(dialogue|remix|strip-audio)$/i;
 
 export function routes() {
  return [
@@ -34,7 +34,7 @@ export function routes() {
   } },
   { method: 'POST', pattern: projectAction, async handler({ ctx, match, req, body, res, reply }) {
    requireOperator(ctx);
-   const method = match[2] === 'dialogue' ? 'voiceDialogue' : 'voiceRemix';
+   const method = { dialogue: 'voiceDialogue', remix: 'voiceRemix', 'strip-audio': 'stripAudio' }[match[2]];
    const data = await projects(ctx)[method](creationWorkspaceId(ctx), match[1], revisionBody(req, body || {}));
    if (data.project) res.setHeader('ETag', `"r${data.project.revision}"`);
    reply(res, 200, data);

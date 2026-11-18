@@ -17,7 +17,8 @@ const staticFiles = new Map([
   ['/logo.png', ['web/dist/logo.png', 'image/png']],
   ['/', ['web/dist/index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['web/dist/index.html', 'text/html; charset=utf-8']],
-  // 旧原型保留为回退入口，React 构建产物不可用时仍可打开。
+  // 旧原型仅保留给未接入创作库的本地开发回退；配置 creationStore 后这些路径统一返回 410，
+  // 主流程只使用 web/dist 的 React 应用与 /api/creation/*。
   ['/prototype/prototype.html', ['prototype/prototype.html', 'text/html; charset=utf-8']],
   ['/prototype/generation.js', ['prototype/generation.js', 'text/javascript; charset=utf-8']],
   ['/prototype/generation.css', ['prototype/generation.css', 'text/css; charset=utf-8']],

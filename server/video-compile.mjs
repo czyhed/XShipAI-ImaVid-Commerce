@@ -15,10 +15,11 @@ export const run = (command, args, { timeoutMs = 10 * 60 * 1000, spawnFn = spawn
  child.stdout?.on('data', data => { stdout += data; });
  child.stderr?.on('data', data => { if (stderr.length < 64 * 1024) stderr += data; });
  child.on('error', error => { clearTimeout(timer); reject(error); });
- child.on('close', code => {
+ child.on('close', (code, signal) => {
   clearTimeout(timer);
   if (code === 0) resolve({ stdout, stderr });
-  else reject(new AppError('FFMPEG_FAILED', `视频拼接失败（ffmpeg 退出码 ${code}）：${stderr.slice(-400) || '无错误输出'}`, 503));
+  const termination = code === null && signal ? `，终止信号 ${signal}` : '';
+  reject(new AppError('FFMPEG_FAILED', `视频拼接失败（ffmpeg 退出码 ${code}${termination}）：${stderr.slice(-400) || '无错误输出'}`, 503));
  });
 });
 
@@ -46,12 +47,13 @@ export function buildCompileArgs(clips, output, { crf = 20 } = {}) {
    chains.push(`anullsrc=r=${COMPILE_SAMPLE_RATE}:cl=stereo,atrim=duration=${duration.toFixed(3)},asetpts=PTS-STARTPTS[a${index}]`);
   }
  });
- const inputs = clips.flatMap((_, index) => ['-i', `clip${index}.mp4`]);
+ const inputs = clips.flatMap((_, index) => ['-threads', '1', '-i', `clip${index}.mp4`]);
  const joined = clips.map((_, index) => `[v${index}][a${index}]`).join('');
  return [
   ...inputs,
+  '-filter_complex_threads', '1',
   '-filter_complex', `${chains.join(';')};${joined}concat=n=${clips.length}:v=1:a=1[vout][aout]`,
-  '-map', '[vout]', '-map', '[aout]', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(crf), '-pix_fmt', 'yuv420p',
+  '-map', '[vout]', '-map', '[aout]', '-c:v', 'libx264', '-threads:v', '1', '-preset', 'veryfast', '-crf', String(crf), '-pix_fmt', 'yuv420p',
   '-c:a', 'aac', '-b:a', '192k', '-ar', String(COMPILE_SAMPLE_RATE), '-ac', '2', '-movflags', '+faststart', '-y', output,
  ];
 }

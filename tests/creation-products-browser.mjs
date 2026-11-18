@@ -10,8 +10,9 @@ import { deflateSync, crc32 } from 'node:zlib';
 import { startCreationFixture } from './creation-products-support.mjs';
 
 function png(){const chunk=(type,data)=>{const t=Buffer.from(type),n=Buffer.alloc(4),c=Buffer.alloc(4);n.writeUInt32BE(data.length);c.writeUInt32BE(crc32(Buffer.concat([t,data])));return Buffer.concat([n,t,data,c]);};const h=Buffer.alloc(13);h.writeUInt32BE(64,0);h.writeUInt32BE(64,4);h[8]=8;h[9]=2;return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',h),chunk('IDAT',deflateSync(Buffer.alloc(64*(64*3+1)))),chunk('IEND',Buffer.alloc(0))]);}
+const paste=async(page,{name='image.png',type='image/png',buffer,text})=>page.getByLabel('商品聊天').evaluate((el,data)=>{const dt=new DataTransfer();if(data.text!==undefined)dt.setData('text/plain',data.text);else{const binary=atob(data.b64),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);dt.items.add(new File([bytes],data.name,{type:data.type}));}const event=new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true});el.dispatchEvent(event);return event.defaultPrevented;},{name,type,text,b64:buffer?.toString('base64')});
 const evidence=await mkdtemp(path.join(os.tmpdir(),'creation-products-qa-'));
-await writeFile(path.join(evidence,'scenarios.md'),'商品首消息、刷新、手工资料、冲突采纳、资料图转素材、创作图上传、素材预览重命名下载、模板创建编辑删除、回收站恢复与管理员预览永久删除、查看者只读、桌面和375px布局、识别失败保留输入。数据库与S3/模型HTTP全为临时测试环境。\n');
+await writeFile(path.join(evidence,'scenarios.md'),'商品首消息、刷新、剪贴板粘贴截图（含纯文本与不支持格式）、手工资料、冲突采纳、资料图转素材、创作图上传、素材预览重命名下载、模板创建编辑删除、回收站恢复与管理员预览永久删除、查看者只读、桌面和375px布局、识别失败保留输入。数据库与S3/模型HTTP全为临时测试环境。\n');
 let fixture,vite,server,browser;
 const events=[];
 try{
@@ -32,6 +33,10 @@ try{
  await page.getByLabel('商品聊天').fill('茶杯是陶瓷，容量300ml');await expect.poll(()=>page.evaluate(()=>globalThis.qa.editing)).toBe(true);await page.getByRole('button',{name:'发送资料',exact:true}).click();await expect(page.getByRole('heading',{name:'茶杯',exact:true})).toBeVisible();await expect.poll(()=>page.evaluate(()=>Boolean(globalThis.qa.selection))).toBe(true);await expect.poll(()=>page.evaluate(()=>globalThis.qa.editing)).toBe(false);
  await page.getByRole('button',{name:'商品资料',exact:true}).click();await page.getByRole('textbox',{name:'商品名称',exact:true}).fill('手工茶杯');await page.getByRole('button',{name:'保存资料',exact:true}).click();await expect(page.getByRole('heading',{name:'手工茶杯',exact:true})).toBeVisible();
  await page.reload();await page.getByRole('button',{name:/手工茶杯/}).click();await expect(page.getByRole('heading',{name:'手工茶杯',exact:true})).toBeVisible();
+ if(!await paste(page,{buffer:png()}))throw new Error('图片粘贴应阻止默认行为');await expect(page.getByRole('button',{name:/^移除 粘贴图片-\d{8}-\d{6}\.png$/})).toBeVisible();
+ if(await paste(page,{text:'纯文本粘贴'}))throw new Error('纯文本粘贴不应被拦截');
+ if(!await paste(page,{name:'image.gif',type:'image/gif',buffer:Buffer.from('GIF89a')}))throw new Error('不支持的剪贴板图片也应阻止默认行为');await expect(page.getByRole('alert')).toContainText('剪贴板图片格式不支持');await expect(page.locator('.cp-attachment')).toHaveCount(1);
+ await page.getByRole('button',{name:/^移除 粘贴图片-/}).click();
  await page.locator('input[type=file]').first().setInputFiles({name:'资料.png',mimeType:'image/png',buffer:png()});await expect(page.getByRole('button',{name:'移除 资料.png'})).toBeVisible();await page.getByRole('button',{name:'发送资料',exact:true}).click();await expect(page.getByRole('button',{name:'加入商品素材'})).toBeVisible();await page.getByRole('button',{name:'加入商品素材'}).click();
  await page.getByRole('button',{name:/创作素材/}).click();await expect(page.getByRole('img',{name:'资料.png'})).toBeVisible();await page.screenshot({path:path.join(evidence,'products-desktop.png'),fullPage:true});
  const desktopColumns=await page.locator('.cp-workspace').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length);if(desktopColumns!==2)throw new Error('Desktop product workspace must show list and detail side by side');

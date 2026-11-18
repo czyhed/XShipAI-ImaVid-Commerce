@@ -1,12 +1,21 @@
+// 工作台展示的是「任务当前状态」，不是运行历史：同一任务多次重试只取最新一条运行记录。
+// 否则重试成功或把节点删掉后，旧的失败运行仍会留在「待处理」里。
+const LATEST_TASK_RUNS = `SELECT DISTINCT ON (r.project_id, r.task_id)
+  r.id, r.project_id, r.task_id, r.status, r.usage, r.input, r.created_at, p.body->>'name' AS project_name
+ FROM sj_creation_runs r
+ JOIN sj_creation_records p ON p.id=r.project_id
+ WHERE r.workspace_id=$1 AND p.trashed_at IS NULL
+  AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p.body->'tasks')='array' THEN p.body->'tasks' ELSE '[]'::jsonb END) task WHERE task->>'id'=r.task_id)
+ ORDER BY r.project_id, r.task_id, r.created_at DESC, r.updated_at DESC, r.id DESC`;
 export class CreationOverview {
   constructor(store) { this.store = store; }
   async get(workspace) {
     const pool = this.store.pool;
     const [counts, states, recentProjects, recentRuns, amounts, recentUsage] = await Promise.all([
       pool.query(`SELECT kind,count(*)::int AS n FROM sj_creation_records WHERE workspace_id=$1 AND trashed_at IS NULL GROUP BY kind`,[workspace]),
-      pool.query(`SELECT status,count(*)::int AS n FROM sj_creation_runs WHERE workspace_id=$1 GROUP BY status`,[workspace]),
+      pool.query(`SELECT status,count(*)::int AS n FROM (${LATEST_TASK_RUNS}) latest GROUP BY status`,[workspace]),
       pool.query(`SELECT id,body,body->>'name' AS name,updated_at FROM sj_creation_records WHERE workspace_id=$1 AND kind='project' AND trashed_at IS NULL ORDER BY updated_at DESC,id DESC LIMIT 12`,[workspace]),
-      pool.query(`SELECT r.id,r.project_id,r.task_id,r.status,r.usage,r.input,r.created_at,p.body->>'name' AS project_name FROM sj_creation_runs r JOIN sj_creation_records p ON p.id=r.project_id WHERE r.workspace_id=$1 ORDER BY r.created_at DESC,r.id DESC LIMIT 100`,[workspace]),
+      pool.query(`SELECT * FROM (${LATEST_TASK_RUNS}) latest ORDER BY created_at DESC,id DESC LIMIT 100`,[workspace]),
       pool.query(`SELECT usage FROM sj_creation_runs WHERE workspace_id=$1 UNION ALL SELECT detail->'usage' AS usage FROM sj_creation_audit WHERE workspace_id=$1 AND action IN ('model.complete','creation.retained-cost')`,[workspace]),
       pool.query(`SELECT id,detail,action,created_at FROM sj_creation_audit WHERE workspace_id=$1 AND action IN ('model.complete','creation.retained-cost') ORDER BY created_at DESC,id DESC LIMIT 100`,[workspace]),
     ]);

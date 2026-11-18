@@ -15,8 +15,18 @@
 .vs-card h3{margin:0 0 8px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px}
 .vs-card h3 .v3-grow{flex:1}
 
-/* 时间线：一排缩略图，横向滚动，吸顶 */
-.vs-track{list-style:none;margin:0 -14px;padding:10px 14px;display:flex;gap:10px;overflow-x:auto;overflow-y:hidden;position:sticky;top:0;z-index:6;background:var(--v3-bg);border-bottom:1px solid var(--v3-line-soft);scroll-snap-type:x proximity}
+/* 时间线：吸顶工具条 + 可横向滚动的缩略图轨道；支持收起为当前分镜摘要 */
+.vs-track-shell{position:sticky;top:0;z-index:6;margin:0 -14px;padding:6px 14px 8px;background:var(--v3-bg);border-bottom:1px solid var(--v3-line-soft)}
+.vs-track-shell.is-collapsed{padding-bottom:6px}
+.vs-track-bar{display:flex;align-items:center;gap:12px;min-height:28px;margin-bottom:6px;color:var(--v3-dim)}
+.vs-track-bar>strong{flex:0 0 auto;font-size:11px;font-weight:600}
+.vs-track-bar>strong small{margin-left:4px;color:var(--v3-mute);font-size:10px;font-weight:400}
+.vs-track-collapse{margin-left:auto}
+.vs-track-summary{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
+.vs-track-current{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--v3-fg)}
+.vs-track-summary .v3-badge{flex:0 0 auto}
+.vs-track-summary .v3-btn{margin-left:auto;flex:0 0 auto}
+.vs-track{list-style:none;margin:0;padding:0;display:flex;gap:10px;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x proximity}
 .vs-tile{flex:0 0 150px;width:150px;position:relative;scroll-snap-align:start;border:1px solid var(--v3-line);border-radius:10px;background:var(--v3-panel);padding:6px;display:flex;flex-direction:column;gap:5px;cursor:grab;transition:border-color .12s,box-shadow .12s}
 .vs-tile.on{border-color:var(--v3-accent);box-shadow:0 0 0 2px var(--v3-accent-soft)}
 .vs-tile.dragging{opacity:.45}
@@ -27,8 +37,9 @@
 .vs-tile-no{position:absolute;left:4px;top:4px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:var(--v3-accent);color:#fff;font-size:11px;line-height:18px;text-align:center}
 .vs-tile-title{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--v3-fg)}
 .vs-tile-meta{display:flex;align-items:center;justify-content:space-between;gap:4px;font-size:11px;color:var(--v3-mute)}
-.vs-tile-flags{display:flex;flex-wrap:wrap;gap:3px}
-.vs-flag{font-size:10px;line-height:1.4;padding:1px 6px;border-radius:999px;white-space:nowrap}
+.vs-tile-flags{display:flex;flex-wrap:wrap;align-items:center;gap:3px}
+.vs-tile-meta .v3-badge,.vs-tile-flags .vs-flag{box-sizing:border-box;display:inline-flex;align-items:center;min-height:18px;font-size:10px;line-height:14px;padding:1px 6px;vertical-align:middle;white-space:nowrap}
+.vs-flag{border-radius:999px}
 .vs-flag.custom{background:var(--v3-accent-soft);color:var(--v3-accent);border:1px solid var(--v3-edge)}
 .vs-flag.issue{background:var(--v3-warn-soft);color:var(--v3-warn);border:1px solid transparent;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .vs-flag.issue[data-issue="failed"],.vs-flag.issue[data-issue="deleted"]{background:var(--v3-bad-soft);color:var(--v3-bad)}
@@ -126,7 +137,11 @@
  .vs-top{padding:8px 10px}
  .vs-summary{white-space:normal;flex:1 1 100%}
  .vs-body{padding:0 10px 16px}
- .vs-track{margin:0 -10px;padding:8px 10px}
+ .vs-track-shell{margin:0 -10px;padding:6px 10px 8px}
+ .vs-track-shell.is-collapsed{padding-bottom:6px}
+ .vs-track-bar{gap:8px}
+ .vs-track-current{font-size:11px}
+ .vs-track{margin:0;padding:0}
  .vs-tile{flex-basis:132px;width:132px}
  .vs-names{grid-template-columns:minmax(0,1fr)}
  .vs-drawer{position:absolute;inset:0;width:auto;flex:none;border-left:0}

@@ -83,12 +83,31 @@ export function VideoDialogue({ task, duration, locked, change, editor }) {
  const voiceReady = Boolean(editor.voiceConfigured);
  const dubMode = task.dubMode || 'none';
  const dub = editor.dubState?.(task.id) || null;
- const [pending, setPending] = useState(false), [problem, setProblem] = useState('');
+ const [pending, setPending] = useState(false), [pendingPhase, setPendingPhase] = useState(''), [problem, setProblem] = useState(''), [waiting, setWaiting] = useState(false);
+ const [writing, setWriting] = useState(false), [writingProblem, setWritingProblem] = useState('');
  const hasText = dialogue.some(line => line.text?.trim());
  const needed = estimateDialogueSeconds(dialogue);
  const warning = !dub?.audio && hasText && needed > duration ? `台词约需 ${Math.ceil(needed)} 秒，超过分镜时长 ${duration} 秒，建议加长时长或精简台词。` : '';
- const synthesize = async () => { setPending(true); setProblem(''); try { await editor.synthesizeDialogue(task.id); } catch (e) { setProblem(e.message); } finally { setPending(false); } };
- const remix = async () => { setPending(true); setProblem(''); try { await editor.remixDub(task.id); } catch (e) { setProblem(e.message); } finally { setPending(false); } };
+ // 同一次配音可能已经由另一次点击（或另一个标签页）在合成：409 不是失败，按「进行中」展示并自动刷新状态。
+ const synthesize = async () => {
+  setPending(true); setPendingPhase('synthesis'); setProblem(''); setWaiting(false);
+  try { await editor.synthesizeDialogue(task.id); }
+  catch (e) {
+   if (e.code === 'DUB_IN_PROGRESS') { setWaiting(true); [2000, 5000, 10000, 20000, 35000].forEach(ms => setTimeout(() => editor.refresh?.(), ms)); }
+   else setProblem(e.message);
+  }
+  finally { setPending(false); setPendingPhase(''); }
+ };
+ useEffect(() => { if (waiting && dub?.status === 'fresh') setWaiting(false); }, [waiting, dub?.status]);
+ // 服务端把「正在合成」写在节点上：重新进入页面也能看到，并在合成期间持续刷新，完成后自动变成「已合成」。
+ useEffect(() => {
+  if (!dub?.pending) return;
+  const timer = setInterval(() => editor.refresh?.(), 5000);
+  return () => clearInterval(timer);
+ }, [dub?.pending]);
+ const remix = async () => { setPending(true); setPendingPhase('mix'); setProblem(''); try { await editor.remixDub(task.id); } catch (e) { setProblem(e.message); } finally { setPending(false); setPendingPhase(''); } };
+ // AI 写这一镜：只生成台词文本，成功后由项目详情刷新带回节点。
+ const writeDialogue = async () => { setWriting(true); setWritingProblem(''); try { await editor.generateDialogue([task.id]); } catch (e) { setWritingProblem(e.message); } finally { setWriting(false); } };
  // 提醒以节点当前时长为准：加长后立即消失，不等服务端详情刷新。
  const suggestion = dub?.status === 'fresh' && dub.audio && dub.audio.durationSec > duration ? { ...dub.suggestion, message: `配音约 ${Number(dub.audio.durationSec).toFixed(1)} 秒，超过分镜时长 ${duration} 秒。`, suggestedDuration: dub.audio.durationSec <= 29 ? Math.min(30, Math.ceil(dub.audio.durationSec + 1)) : null } : null;
  const lengthen = () => change({ params: { ...(editor.latest(task.id)?.params || task.params || {}), duration: suggestion.suggestedDuration } });
@@ -96,9 +115,18 @@ export function VideoDialogue({ task, duration, locked, change, editor }) {
   const ids = [...new Set(dialogue.map(line => line.roleId).filter(Boolean))];
   editor.speedUpRoles?.(ids);
  };
- const dubbing = ['post', 'lipsync'].includes(dubMode) && hasText;
- const dubStatusText = dub?.status === 'fresh' ? `已合成 · ${Number(dub.audio.durationSec).toFixed(1)} 秒 · ${dub.audio.textWords ?? '—'} 个字符`
-  : dub?.status === 'stale' ? '配音已过期，请重新合成' : '还没有合成配音';
+ const dubbing = ['post', 'lipsync'].includes(dubMode) && (hasText || pending || waiting || Boolean(pendingPhase) || Boolean(dub?.pending) || dub?.dub?.status === 'running');
+ const synthesizing = waiting || Boolean(dub?.pending) || pendingPhase === 'synthesis';
+ const mixing = dubMode === 'post' && (dub?.dub?.status === 'running' || pendingPhase === 'mix');
+ const remixAvailable = dubMode === 'post' && dub?.status === 'fresh' && !dub?.pending && (dub?.needsMix || dub?.dub?.status === 'failed');
+ const actionBusy = pending || synthesizing || mixing;
+ const actionLabel = synthesizing ? '配音合成中…' : mixing ? '混音中…' : remixAvailable ? '重新混音' : dub?.status === 'stale' ? '重新合成配音' : '合成配音';
+ const dubStatusText = synthesizing ? '配音合成中' : dub?.status === 'stale' ? '配音已过期'
+  : dubMode === 'post' && dub?.dub?.status === 'running' ? '混音中'
+  : dubMode === 'post' && dub?.dub?.status === 'failed' ? '混音失败'
+  : dubMode === 'post' && dub?.needsMix ? '待混音'
+  : dub?.status === 'fresh' ? `已配音 · ${Number(dub.audio.durationSec).toFixed(1)} 秒 · ${dub.audio.textWords ?? '—'} 个字符`
+  : '待配音';
  return <fieldset className="vn-dialogue">
   <legend>台词与配音</legend>
   {dialogue.map((line, index) => <div className="vn-line" key={index}>
@@ -112,13 +140,16 @@ export function VideoDialogue({ task, duration, locked, change, editor }) {
    </select>}
   </div>)}
   <button type="button" className="v3-btn small" disabled={locked || dialogue.length >= 50} onClick={() => change({ dialogue: [...latest(), { text: '', language: 'zh', ...(roles[0] ? { roleId: roles[0].id } : {}) }] })}>＋ 添加台词</button>
+  <button type="button" className="v3-btn small primary" disabled={locked || writing} onClick={writeDialogue}>{writing ? 'AI 正在写台词…' : 'AI 写本镜台词'}</button>
+  <small className="vn-note">依据项目脚本、商品信息和本镜标题/描述/视频提示词/时长生成；生成后请检查并选择角色，不会自动合成声音。</small>
+  {writingProblem && <p className="vr-error" role="alert">{writingProblem}</p>}
   {warning && <p className="vn-warn" role="status">{warning}</p>}
   <label className="v3-field"><span>配音方式</span><select aria-label="配音方式" value={dubMode} disabled={locked} onChange={e => change({ dubMode: e.target.value })}>
    <option value="none">不配音</option><option value="lipsync">口型同步</option><option value="post" disabled={!voiceReady && dubMode !== 'post'}>{voiceReady ? '后期配音' : '后期配音（需先配置语音渠道）'}</option>
   </select></label>
   {!voiceReady && <small className="vn-note">后期配音需要先在模型中心配置火山引擎语音渠道。</small>}
   {dubMode === 'lipsync' && task.videoMode !== 'reference' && <small className="vn-note">口型同步依赖参考音频，请使用「全能参考」方式。</small>}
-  {dubMode === 'post' && <small className="vn-note">后期配音：台词不写入提示词，视频生成后再把配音混入，原声压低到约 30%。</small>}
+  {dubMode === 'post' && <small className="vn-note">后期配音：台词不写入提示词，视频生成后再把配音混入，原声压低到约 30%。已生成的视频可在预览下点「去除音轨」，只保留配音且不消耗积分。</small>}
   {dubMode === 'lipsync' && <small className="vn-note">口型同步：台词写入提示词，合成语音作为参考音频一并提交。</small>}
   {dubMode === 'none' && hasText && <small className="vn-note">台词会写入提示词，由视频模型直接生成人声。</small>}
   {dubbing && <div className="vn-dub" aria-label="台词配音">
@@ -126,7 +157,7 @@ export function VideoDialogue({ task, duration, locked, change, editor }) {
    {roles.length === 0 && <small className="vn-note">先添加角色并选择音色。<button type="button" className="v3-btn small" onClick={() => editor.openRoles?.()}>角色与音色</button></small>}
    {dub?.issue && dub.status !== 'fresh' && roles.length > 0 && <small className="vn-note">{dub.issue}</small>}
    <div className="vn-dub-actions">
-    <button type="button" className="v3-btn small primary" disabled={locked || pending || !voiceReady || !!dub?.issue} title={voiceReady ? '按行合成并拼接，产生少量语音字符费用' : '请先在模型中心配置火山引擎语音渠道'} onClick={synthesize}>{pending ? '处理中…' : dub?.status === 'stale' ? '重新合成配音' : '合成配音'}</button>
+    <button type="button" className={`v3-btn small${remixAvailable ? '' : ' primary'}`} disabled={locked || actionBusy || !voiceReady || !!dub?.issue} aria-busy={actionBusy} title={mixing ? '本地 ffmpeg 正在混音' : remixAvailable ? '使用本地 ffmpeg 重混，不调用 TTS 或视频供应商' : voiceReady ? '按行合成并拼接，产生少量语音字符费用' : '请先在模型中心配置火山引擎语音渠道'} onClick={remixAvailable ? remix : synthesize}>{actionLabel}</button>
     {dub?.status === 'stale' && <small className="vn-warn" role="status">配音已过期，请重新合成</small>}
    </div>
    {dub?.audio && dub.status === 'fresh' && <audio src={`/api/creation/assets/${dub.audio.assetId}/file`} controls preload="none" aria-label="台词配音试听" />}
@@ -140,10 +171,10 @@ export function VideoDialogue({ task, duration, locked, change, editor }) {
     {dub.audio?.cues?.length ? <ol className="vn-subs-list" aria-label="字幕条目预览">{dub.audio.cues.map((cue, i) => <li key={i} className={task.subtitles === false ? 'off' : ''}><time>{cueTime(cue.start)} – {cueTime(cue.end)}</time><span>{cue.text}</span></li>)}</ol>
      : <small className="vn-note">这段配音没有字幕时间戳，重新合成配音后即可生成字幕。</small>}
    </div>}
-   {dubMode === 'post' && dub?.dub?.status === 'running' && <small className="vn-note" role="status">正在混音…</small>}
    {dubMode === 'post' && dub?.dub?.status === 'failed' && <p className="vn-warn" role="alert">混音失败：{dub.dub.error}（原视频不受影响）</p>}
    {dubMode === 'post' && dub?.dub?.truncated && dub.dub.assetId && <small className="vn-warn">配音比视频长，混音时已截断到视频长度。</small>}
-   {dubMode === 'post' && (dub?.needsMix || dub?.dub?.status === 'failed') && <button type="button" className="v3-btn small" disabled={locked || pending} onClick={remix}>重新混音</button>}
+   {mixing && <small className="vn-note" role="status">本地 ffmpeg 正在重混，不调用 TTS 或视频供应商。</small>}
+   {synthesizing && <p className="vn-note" role="status">配音正在合成，完成后会自动刷新。</p>}
    {problem && <p className="vr-error" role="alert">{problem}</p>}
   </div>}
  </fieldset>;

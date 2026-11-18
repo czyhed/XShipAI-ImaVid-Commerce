@@ -19,8 +19,11 @@ export function ProgressBar({ steps, completed }) {
   return <div className="rv-progress">{steps.map((_, i) => <i key={i} className={i < completed ? 'done' : ''} />)}</div>;
 }
 
-export function Toast({ message }) {
-  return <div id="toast" className={`toast ${message ? 'is-on' : ''}`} role="status">{message || ''}</div>;
+// 顶部居中浮层：不占布局，最多三条；错误用 role=alert，其余用 role=status。
+export function Toast({ messages = [] }) {
+  return <div id="toast" className="toast-stack" aria-live="polite">
+    {messages.map(item => <div key={item.id} className={`toast ${item.type === 'error' ? 'is-error' : ''}`} role={item.type === 'error' ? 'alert' : 'status'}>{item.text}</div>)}
+  </div>;
 }
 
 export function Dialog({ id, className = '', labelId, onClose, children }) {
@@ -59,10 +62,10 @@ export function Modal({ title, children, onClose, message = '' }) {
 }
 
 // 统一的删除 / 危险操作确认：替代 window.confirm，与全局蓝色主题一致。
-export function ConfirmDialog({ open, title = '确认操作', message, confirmText = '确认', danger = true, busy = false, onCancel, onConfirm }) {
+export function ConfirmDialog({ open, title = '确认操作', message, confirmText = '确认', danger = true, busy = false, placement = 'center', onCancel, onConfirm }) {
   if (!open) return null;
   return createPortal(
-    <div className="cp-modal-backdrop" role="dialog" aria-modal="true" aria-label={title} onClick={event => { if (event.target === event.currentTarget && !busy) onCancel?.(); }}>
+    <div className={`cp-modal-backdrop${placement === 'top' ? ' confirm-top' : ''}`} role="dialog" aria-modal="true" aria-label={title} onClick={event => { if (event.target === event.currentTarget && !busy) onCancel?.(); }}>
       <div className="confirm-box">
         <h2>{title}</h2>
         <p>{message}</p>

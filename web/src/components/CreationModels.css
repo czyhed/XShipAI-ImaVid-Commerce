@@ -68,6 +68,9 @@
 }
 .cm-channel-block{border-bottom:1px solid #F0F3F8}
 .cm-channel-block .cm-channel{border-bottom:0}
+.cm-row-actions{display:flex;gap:8px;flex-wrap:wrap}
+.cm-hint{margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#667488}
+.cm-hint button{min-height:24px;padding:2px 8px;font-size:11.5px;line-height:1.2}
 .cm-video{margin:0 0 14px;padding:12px 14px;border-radius:10px;background:#F5F7FA;display:flex;flex-direction:column;gap:10px;font-size:13px;color:#46566B}
 .cm-points,.cm-prices{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .cm-points b{color:#25313E;font-variant-numeric:tabular-nums}

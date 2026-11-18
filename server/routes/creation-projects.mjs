@@ -22,7 +22,7 @@ export function routes() {
  const ops=/^\/api\/creation\/projects\/([\da-f-]{36})\/ops$/i;
  const status=/^\/api\/creation\/projects\/([\da-f-]{36})\/status$/i;
  const storyboard=/^\/api\/creation\/projects\/([\da-f-]{36})\/storyboard$/i;
- const storyboardAction=/^\/api\/creation\/projects\/([\da-f-]{36})\/storyboard\/(generate-script|generate-shots|sync|compile|tail-frame|shots-request\/apply|shots-request\/discard)$/i;
+ const storyboardAction=/^\/api\/creation\/projects\/([\da-f-]{36})\/storyboard\/(generate-script|generate-shots|generate-dialogue|sync|compile|tail-frame|shots-request\/apply|shots-request\/discard)$/i;
  const subtitlesFile=/^\/api\/creation\/projects\/([\da-f-]{36})\/storyboard\/subtitles\.srt$/i;
  const batchAction=/^\/api\/creation\/projects\/([\da-f-]{36})\/storyboard\/batch\/(preview|start|retry|cancel|resume)$/i;
  return [
@@ -44,7 +44,7 @@ export function routes() {
   }},
   {method:'POST',pattern:storyboardAction,async handler({ctx,match,req,body,res,reply}){
    requireOperator(ctx);
-   const method={'generate-script':'generateScript','generate-shots':'generateShots','sync':'saveStoryboard','compile':'compileStoryboard','tail-frame':'tailFrame','shots-request/apply':'applyShotsRequest','shots-request/discard':'discardShotsRequest'}[match[2]];
+   const method={'generate-script':'generateScript','generate-shots':'generateShots','generate-dialogue':'generateDialogue','sync':'saveStoryboard','compile':'compileStoryboard','tail-frame':'tailFrame','shots-request/apply':'applyShotsRequest','shots-request/discard':'discardShotsRequest'}[match[2]];
    return result(res,reply,await service(ctx)[method](creationWorkspaceId(ctx),projectId(match),revisionBody(req,body)));
   }},
   {method:'POST',pattern:batchAction,async handler({ctx,match,req,body,res,reply}){

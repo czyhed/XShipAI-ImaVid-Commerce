@@ -1,8 +1,8 @@
-// Browser-local review workspace. Every mutation here is a demonstration and
-// is persisted under the prototype key that the pre-React page used.
+// 旧原型演示模块，仅历史参考。活动应用只复用本文件的纯展示函数
+// （ReviewUI 的步骤/费用格式化）；项目、任务与运行记录只经 /api/creation/* 存取，
+// 这里不再读写浏览器存储。
 import { ensureLayout } from './flow.js';
 
-export const REVIEW_KEY = 'sj:prototype:review:v1';
 export const REVIEW_STEPS = ['商品资料', '方案报价', '制作任务', '精修', '质检审核', '打包导出'];
 
 export const TYPES = {
@@ -120,11 +120,7 @@ export function createSeedReview(products) {
 }
 
 export function loadReview(products) {
-  let data = createSeedReview(products);
-  try {
-    const saved = JSON.parse(localStorage.getItem(REVIEW_KEY) || 'null');
-    if (saved?.projects?.length && Array.isArray(saved.users) && Array.isArray(saved.ledger)) data = saved;
-  } catch { /* keep seeded data */ }
+  const data = createSeedReview(products);
   data.flowTemplates ??= [];
   data.projects.forEach(normalize);
   // A reload interrupts local animation; an in-flight demo becomes unknown.
@@ -137,10 +133,8 @@ export function loadReview(products) {
   return data;
 }
 
-export function saveReview(data) {
-  try { localStorage.setItem(REVIEW_KEY, JSON.stringify(data)); return true; }
-  catch { return false; }
-}
+// 兼容旧调用：项目记录保存请走 /api/creation/projects，本地保存不再生效。
+export function saveReview() { return false; }
 
 export function currentStep(p) {
   if (!p.prechecked) return 1;

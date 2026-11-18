@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import DraftText from './DraftText.jsx';
+import { ConfirmDialog } from './ui.jsx';
 import { AssetFeed } from './AssetPicker.jsx';
 import { DEFAULT_PREVIEW_TEXT, MAX_PREVIEW_TEXT, MAX_VOICE_ROLES, VOICE_SOURCE_LABEL, defaultResourceFor, validateVoiceRoles } from '../../../shared/creation-voice.mjs';
 import '../styles/creation-voice.css';
@@ -97,7 +98,7 @@ function DesignPanel({ request, owner, onAssets, role, onUse, configured, writab
 export default function VoiceRolesPanel({ roles, configured, writable, request, owner, onAssets, onSave, onClose }) {
  const [draft, setDraft] = useState(() => roles.map(r => ({ ...r })));
  const [selected, setSelected] = useState(roles[0]?.id || null);
- const [tab, setTab] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [auditionText, setAuditionText] = useState('');
+ const [tab, setTab] = useState(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [auditionText, setAuditionText] = useState(''), [confirmClose, setConfirmClose] = useState(false);
  const role = draft.find(r => r.id === selected) || null;
  const dirty = JSON.stringify(draft) !== JSON.stringify(roles);
  const update = patch => setDraft(old => old.map(r => r.id === selected ? { ...r, ...patch } : r));
@@ -111,8 +112,8 @@ export default function VoiceRolesPanel({ roles, configured, writable, request, 
   try { await onSave(checked.roles); onClose(); } catch (e) { setError(e.message); } finally { setBusy(false); }
  };
  const params = role ? { speechRate: role.speechRate, loudnessRate: role.loudnessRate, emotion: role.emotion, emotionScale: role.emotionScale, contextText: role.contextText } : {};
- return <div className="v3-overlay"><div className="v3-dialog vr-dialog" role="dialog" aria-modal="true" aria-label="角色与音色">
-  <header><h2>角色与音色</h2><button type="button" aria-label="关闭角色与音色" onClick={() => { if (!dirty || window.confirm('角色改动尚未保存，确定关闭？')) onClose(); }}>×</button></header>
+ return <div className="v3-overlay"><div className="v3-dialog vr-dialog" style={{width:'min(1060px,100%)'}} role="dialog" aria-modal="true" aria-label="角色与音色">
+  <header><h2>角色与音色</h2><button type="button" aria-label="关闭角色与音色" onClick={() => { if (dirty) setConfirmClose(true); else onClose(); }}>×</button></header>
   {!configured && <p className="vn-warn" role="status">还没有配置火山引擎语音渠道，可以先整理角色；试听和合成需要先到模型中心添加渠道。</p>}
   <div className="vr-layout">
    <aside className="vr-roles" aria-label="角色列表">
@@ -146,8 +147,8 @@ export default function VoiceRolesPanel({ roles, configured, writable, request, 
    </section>
   </div>
   {error && <p className="vr-error" role="alert">{error}</p>}
-  <footer><button type="button" className="v3-btn" onClick={() => { if (!dirty || window.confirm('角色改动尚未保存，确定关闭？')) onClose(); }}>取消</button><button type="button" className="v3-btn primary" disabled={!writable || busy || !dirty} onClick={save}>{busy ? '保存中…' : '保存角色'}</button></footer>
- </div></div>;
+  <footer><button type="button" className="v3-btn" onClick={() => { if (dirty) setConfirmClose(true); else onClose(); }}>取消</button><button type="button" className="v3-btn primary" disabled={!writable || busy || !dirty} onClick={save}>{busy ? '保存中…' : '保存角色'}</button></footer>
+ </div><ConfirmDialog open={confirmClose} placement="top" title="放弃角色修改" message="角色改动尚未保存，关闭后这些修改将丢失。" confirmText="放弃修改" onCancel={() => setConfirmClose(false)} onConfirm={onClose} /></div>;
 }
 
 // 视频预览：有配音版本时可在「原声 / 配音」之间切换，默认显示配音版。

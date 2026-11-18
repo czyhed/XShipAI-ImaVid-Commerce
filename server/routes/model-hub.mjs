@@ -36,6 +36,7 @@ export function routes() {return [
  },{write:true,status:201}),
  route('POST',new RegExp('^/api/model-hub/channels/(ch_[0-9a-f]{16})/sync$'),({ctx,match})=>ctx.modelHub.sync(match[1]),{write:true}),
  route('POST',new RegExp('^/api/model-hub/channels/(ch_[0-9a-f]{16})/models$'),async({ctx,match,body})=>({model:await ctx.modelHub.configure(match[1],body.modelId,body)}),{write:true}),
+ route('DELETE',new RegExp('^/api/model-hub/channels/(ch_[0-9a-f]{16})/models$'),async({ctx,match,url})=>({removed:await ctx.modelHub.removeModel(match[1],url.searchParams.get('modelId')||'')}),{write:true}),
  route('PATCH',new RegExp('^/api/model-hub/channels/(ch_[0-9a-f]{16})$'),async({ctx,match,body})=>{
   if(body.baseUrl&&body.adapter!=='volcengine-tts')validateUrl(normalizeBaseUrl(body.baseUrl,body.adapter),{local:true});
   if(body.executorConfig?.videoBaseUrl)validateUrl(body.executorConfig.videoBaseUrl,{local:true});

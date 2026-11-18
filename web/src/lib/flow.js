@@ -1,4 +1,5 @@
-// Client-side workflow graph model for the React Flow canvas (Issue #15).
+// Legacy workflow graph model kept for the old review demo.
+// 活动画布使用 shared/creation-workflows.mjs 与 /api/creation/projects，不导入本文件。
 //
 // The browser-local demo stores one workflow per deliverable as a single
 // upstream link (`node.from`). Keeping the model that simple makes the same

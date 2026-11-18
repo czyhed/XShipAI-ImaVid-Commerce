@@ -9,10 +9,13 @@ import { createMediaPrep, checkMediaLimits } from './media-prep.mjs';
 import { videoMediaIssue, inferVideoMode } from './providers/creation-video.mjs';
 import { createFrameExtractor } from './frame-extract.mjs';
 import { CreationVoice, dubState, dialogueAudioStatus, dubSuggestion } from './creation-voice.mjs';
-import { validateVoiceRoles } from '../shared/creation-voice.mjs';
+import { validateVoiceRoles, MAX_VOICE_ROLES } from '../shared/creation-voice.mjs';
 import { checkVideoSettings, normalizeVideoSettings, effectiveVideoParams, SETTING_DEFAULTS } from '../shared/creation-video-settings.mjs';
 import { SHOT_PLANNING_SYSTEM, MAX_PLAN_MATERIALS, materialsForModel, sanitizeShotPlan, previewShot } from './video-shot-plan.mjs';
 const fail=(code,message,status=400)=>{throw new AppError(code,message,status);};
+// 配音合成标记：写入节点，页面重进后也能看到「正在合成」；超过 15 分钟视为残留（服务重启 / 中断）。
+const DUB_PENDING_MS=15*60*1000;
+const isDubPending=task=>{const at=Date.parse(task?.dubPendingAt||'');return Number.isFinite(at)&&Date.now()-at<DUB_PENDING_MS;};
 const clone=value=>JSON.parse(JSON.stringify(value));
 const snapshot=product=>({id:product.id,revision:product.revision,name:product.name,facts:product.facts||{}});
 // 'unknown' 仅为历史数据保留：tick / drive 会立即把它规整为 running 或 failed，界面不再展示。
@@ -31,6 +34,7 @@ const logDiagnostic=(tag,id,error)=>{
  else if(error?.name)parts.push(`cause=${String(error.name).replace(/[^\w.-]/g,'').slice(0,60)}`);
  console.warn(parts.join(' '));
 };
+const DIALOGUE_PLANNING_SYSTEM='你是电商短视频旁白撰稿人。根据商品事实与分镜内容，为每个分镜写第三人称旁白解说，输出纯 JSON {"lines":[{"taskId":"...","text":"..."}]}。必须覆盖输入的每一个 taskId，每个 taskId 一条。中文口语，自然简洁，1–2 句；按每秒约 4 个汉字控制，含标点不超过该镜时长×4 字。只能使用商品事实里已有的信息，缺失就留白，不得编造价格、认证、销量、功效或对比结论。不要出现「镜头」「分镜」「画面」「台词」「配音」等制作词，不要括号、时间码、emoji，不要用引号包裹整句。';
 const VIDEO_PLANNING_PARAMETERS='视频 params 使用 duration（4—30整数秒）、resolution（480P、768P、1080P、2K、4K）、ratio（16:9、9:16、1:1、4:3、3:4、21:9，或有首帧时 adaptive）。不要用像素尺寸或 aspectRatio 字段。视频节点另有 videoMode（text 文生视频、frames 首尾帧、reference 参考素材）：frames 只能连接首帧 first 与尾帧 last 图片，不能混用参考素材；reference 的参考图 refImage 最多 9 张、参考视频 refVideo 最多 3 个、参考音频 refAudio 最多 3 个，合计最多 12 个，参考音频不能单独使用，且不能连接首帧或尾帧；text 不连接任何素材。只有明确要求口型同步时才安排台词 dialogue。';
 const editableKeys=['kind','title','prompt','params','model','productSnapshot','sourceAssetId','sourceRunId','sourceRunIds','maskAssetId','subject','templateSnapshot','videoMode','dialogue','dubMode','tailFrame'];
 // 批量生成：同时处于活跃状态的视频运行最多 3 个。
@@ -964,6 +968,55 @@ export class CreationProjects {
   }
   return this.detail(workspace,id);
  }
+ // AI 生成分镜台词：只调用文本模型写台词，不合成配音、不改已有 dialogueAudio；全片或指定分镜。
+ async generateDialogue(workspace,id,body={}) {
+  const {project}=await this.detail(workspace,id);this.assertProject(project);
+  if(body.taskIds!==undefined&&!Array.isArray(body.taskIds))fail('TASK_INVALID','请选择要重写台词的分镜。',422);
+  const sb=this.normalizeStoryboard(project);
+  const targetOf=taskId=>{
+   const task=project.tasks.find(t=>t.id===taskId),shot=sb.shots.find(s=>s.nodeId===taskId)||null;
+   if(!task||task.kind!=='video')fail('TASK_INVALID','只能为项目里的视频分镜生成台词。',422);
+   const duration=effectiveVideoParams(sb.settings,task.params).duration;
+   return {taskId,title:shot?.title||task.title,description:shot?.description||'',prompt:task.prompt||'',duration:Number.isInteger(duration)?duration:SETTING_DEFAULTS.duration};
+  };
+  const requested=[...new Set(Array.isArray(body.taskIds)?body.taskIds:[])];
+  const inputs=requested.length?requested.map(targetOf):sb.shots.filter(shot=>shot.nodeId&&project.tasks.some(task=>task.id===shot.nodeId&&task.kind==='video')).map(shot=>targetOf(shot.nodeId));
+  if(!inputs.length)fail('TASK_INVALID','请先在视频工作台添加分镜。',422);
+  const response=await this.hub.complete({workspaceId:workspace,stage:'planning',messages:[{role:'user',content:JSON.stringify({task:'video-dialogue',script:sb.script,product:project.productSnapshot,shots:inputs})}],system:DIALOGUE_PLANNING_SYSTEM});
+  let parsed=null;
+  try {parsed=JSON.parse(String(response.text||'').trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,''));}catch{/* 非 JSON 视作无有效台词 */}
+  const limits=new Map(inputs.map(item=>[item.taskId,Math.min(200,item.duration*4)])),picked=new Map();
+  for(const line of Array.isArray(parsed?.lines)?parsed.lines:[]){
+   const taskId=typeof line?.taskId==='string'?line.taskId:'';
+   if(!limits.has(taskId)||picked.has(taskId))continue;
+   const text=String(line?.text??'').replace(/\s+/g,' ').trim();
+   if(!text)continue;
+   const cleaned=[...text].slice(0,limits.get(taskId)).join('').trim();
+   if(cleaned)picked.set(taskId,cleaned);
+  }
+  if(!picked.size)fail('DIALOGUE_GENERATION_FAILED','台词生成失败或返回内容无效，请重试。',502);
+  // 角色与台词按最新项目写入，避免覆盖并发的画布编辑；没有「旁白」时自动创建。
+  await this.store.change(workspace,id,null,current=>{
+   this.assertProject(current);
+   const roles=Array.isArray(current.voiceRoles)?current.voiceRoles:[];
+   let narrator=roles.find(role=>typeof role?.name==='string'&&role.name.trim()==='旁白'),voiceRoles=roles;
+   if(!narrator){
+    if(roles.length>=MAX_VOICE_ROLES)fail('VOICE_ROLES_INVALID',`角色最多 ${MAX_VOICE_ROLES} 个，请先删除不用的角色再生成旁白。`,422);
+    narrator={id:randomUUID(),name:'旁白',source:'system',speaker:'zh_female_xiaohe_uranus_bigtts',resourceId:'seed-tts-2.0',speechRate:0,emotion:'',emotionScale:4,loudnessRate:0,contextText:''};
+    voiceRoles=[...roles,narrator];
+   }
+   let changed=0;
+   const tasks=current.tasks.map(task=>{
+    const text=picked.get(task.id);
+    if(!text)return task;
+    changed+=1;
+    return {...task,dialogue:[{text,language:'zh',roleId:narrator.id}],dubMode:'post'};
+   });
+   if(!changed)fail('TASK_INVALID','分镜节点已被删除，请刷新后重试。',409);
+   return {...current,voiceRoles,tasks};
+  });
+  return this.detail(workspace,id);
+ }
  // ---------- AI 分镜：素材清单与确认（V-16） ----------
  // 可用素材：商品创作图片、项目内成功的生成结果（图片与视频）、项目或商品下上传的音频与视频；每项一个短编号 M1、M2…。
  async materialCatalog(workspace,project,client=this.pool) {
@@ -1727,27 +1780,49 @@ export class CreationProjects {
    const run=runs.filter(r=>r.taskId===task.id&&r.status==='succeeded'&&r.output?.assetId&&r.input?.kind==='video').at(-1)||null;
    const dub=run?.output?.dub||null;
    const fresh=run?this.freshDub(run,task,project):null;
-   result[task.id]={status,issue:state.issue,lines:state.lines.length,audio:task.dialogueAudio?{assetId:task.dialogueAudio.assetId,durationSec:task.dialogueAudio.durationSec,textWords:task.dialogueAudio.textWords??null,cues:Array.isArray(task.dialogueAudio.cues)?task.dialogueAudio.cues:null}:null,subtitles:{enabled:task.subtitles!==false,available:this.shotCues({...task,subtitles:true},project.voiceRoles).length>0,active:this.shotCues(task,project.voiceRoles).length>0},suggestion:status==='fresh'?dubSuggestion(task,task.dialogueAudio.durationSec):null,
+   result[task.id]={status,issue:state.issue,pending:isDubPending(task),lines:state.lines.length,audio:task.dialogueAudio?{assetId:task.dialogueAudio.assetId,durationSec:task.dialogueAudio.durationSec,textWords:task.dialogueAudio.textWords??null,cues:Array.isArray(task.dialogueAudio.cues)?task.dialogueAudio.cues:null}:null,subtitles:{enabled:task.subtitles!==false,available:this.shotCues({...task,subtitles:true},project.voiceRoles).length>0,active:this.shotCues(task,project.voiceRoles).length>0},suggestion:status==='fresh'?dubSuggestion(task,task.dialogueAudio.durationSec):null,
     dub:dub?{runId:run.id,status:dub.status,error:dub.error||null,truncated:Boolean(dub.truncated),assetId:fresh?dub.assetId:null,outdated:dub.status==='succeeded'&&!fresh}:null,
     needsMix:Boolean(run)&&task.dubMode==='post'&&status==='fresh'&&!fresh&&dub?.status!=='running'};
   }
   return result;
  }
  // 台词配音：逐行合成并拼接为一段 mp3，写入节点 dialogueAudio（付费小额；只在用户点击「合成配音」时调用）。
+ // 合成期间在节点上写 dubPendingAt：页面刷新或换设备进来仍能看到「正在合成」，完成后自动消失。
  async voiceDialogue(workspace,id,body={}) {
   const {project}=await this.detail(workspace,id);this.assertProject(project);
   const task=project.tasks.find(t=>t.id===body.taskId);
   if(!task||nodeKind(task)!=='video')fail('TASK_INVALID','请选择一个视频节点。');
-  const result=await this.voice.synthesizeDialogue(workspace,task,project.voiceRoles);
-  const asset=await this.media.put(workspace,{bytes:result.bytes,mime:'audio/mpeg',name:`${task.title}-台词配音.mp3`.slice(0,180),projectId:id,taskId:task.id,role:'voice',derivedFrom:{kind:'dialogue-audio',hash:result.hash}});
+  const token=randomUUID();
+  let claimed=false;
   await this.store.change(workspace,id,null,current=>{
-   this.assertProject(current);
    const node=current.tasks.find(t=>t.id===task.id);
    if(!node)fail('TASK_INVALID','分镜节点已被删除。',409);
-   if(dubState(node,current.voiceRoles).hash!==result.hash)fail('DUB_CHANGED','合成期间台词或角色已改动，请重新合成。',409);
-   return {...current,tasks:current.tasks.map(t=>t.id===task.id?{...t,dialogueAudio:{assetId:asset.id,hash:result.hash,durationSec:result.durationSec,textWords:result.textWords,lines:result.lines,cues:result.cues||[],createdAt:new Date().toISOString()}}:t)};
+   if(isDubPending(node))return null;
+   claimed=true;
+   return {...current,tasks:current.tasks.map(t=>t.id===task.id?{...t,dubPendingAt:new Date().toISOString(),dubPendingToken:token}:t)};
   },{keepRevision:true});
-  return this.detail(workspace,id);
+  if(!claimed)fail('DUB_IN_PROGRESS','这个分镜的配音正在合成，请稍候。',409);
+  // 只清除本次请求写入的标记，避免把并发的另一次合成的状态清掉。
+  const clearPending=current=>({...current,tasks:current.tasks.map(t=>{
+   if(t.id!==task.id||t.dubPendingToken!==token)return t;
+   const {dubPendingAt:_at,dubPendingToken:_token,...rest}=t;return rest;
+  })});
+  try {
+   const result=await this.voice.synthesizeDialogue(workspace,task,project.voiceRoles);
+   const asset=await this.media.put(workspace,{bytes:result.bytes,mime:'audio/mpeg',name:`${task.title}-台词配音.mp3`.slice(0,180),projectId:id,taskId:task.id,role:'voice',derivedFrom:{kind:'dialogue-audio',hash:result.hash}});
+   await this.store.change(workspace,id,null,current=>{
+    const next=clearPending(current);
+    this.assertProject(next);
+    const node=next.tasks.find(t=>t.id===task.id);
+    if(!node)fail('TASK_INVALID','分镜节点已被删除。',409);
+    if(dubState(node,next.voiceRoles).hash!==result.hash)fail('DUB_CHANGED','合成期间台词或角色已改动，请重新合成。',409);
+    return {...next,tasks:next.tasks.map(t=>t.id===task.id?{...t,dialogueAudio:{assetId:asset.id,hash:result.hash,durationSec:result.durationSec,textWords:result.textWords,lines:result.lines,cues:result.cues||[],createdAt:new Date().toISOString()}}:t)};
+   },{keepRevision:true});
+   return this.detail(workspace,id);
+  } catch (error) {
+   await this.store.change(workspace,id,null,clearPending,{keepRevision:true}).catch(()=>{});
+   throw error;
+  }
  }
  // 重新混音：用节点当前的配音对最新成功运行重做混音（不调用付费接口）。
  async voiceRemix(workspace,id,body={}) {
@@ -1762,6 +1837,24 @@ export class CreationProjects {
   if(!run)fail('DUB_NO_VIDEO','这个分镜还没有生成成功的视频。',409);
   const outcome=await this.mixRun(workspace,run.id,{force:true,dialogueAudio:task.dialogueAudio});
   if(outcome==='busy')fail('DUB_IN_PROGRESS','正在混音，请稍候。',409);
+  return this.detail(workspace,id);
+ }
+ // 去音轨：对已生成的视频用 ffmpeg 去掉音轨（不调用付费接口），原视频资产保留在 output.originalAssetId。
+ // 只允许在最近一次成功视频上操作；已有配音版本时一起作废，避免混音时把旧原声混进来。
+ async stripAudio(workspace,id,body={}) {
+  const {project,runs}=await this.detail(workspace,id);this.assertProject(project);
+  const task=project.tasks.find(t=>t.id===body.taskId);
+  if(!task||nodeKind(task)!=='video')fail('TASK_INVALID','请选择一个视频节点。');
+  const run=runs.filter(r=>r.taskId===task.id&&r.status==='succeeded'&&r.output?.assetId&&r.input?.kind==='video').at(-1);
+  if(!run)fail('VIDEO_NOT_READY','这个分镜还没有生成成功的视频。',409);
+  const requested=body.runId?runs.find(r=>r.id===body.runId):null;
+  const target=requested&&requested.taskId===task.id&&requested.status==='succeeded'&&requested.output?.assetId&&requested.input?.kind==='video'?requested:run;
+  if(target.output.dub?.status==='running')fail('DUB_IN_PROGRESS','正在混音，请稍候再去除音轨。',409);
+  const video=await this.media.read(workspace,target.output.assetId);
+  const stripped=await this.voice.stripAudio({video:video.bytes});
+  if(!stripped.hasAudio)fail('VIDEO_NO_AUDIO','这段视频本来就没有音轨，不需要再处理。',422);
+  const asset=await this.media.put(workspace,{bytes:stripped.bytes,mime:'video/mp4',name:`${task.title||'分镜'}-无音轨.mp4`.slice(0,180),projectId:id,taskId:task.id,role:'result',derivedFrom:{runId:target.id,kind:'strip-audio'}});
+  await this.pool.query(`UPDATE sj_creation_runs SET output=(COALESCE(output,'{}'::jsonb)-'dub')||jsonb_build_object('assetId',$2::text,'fileUrl',$3::text,'originalAssetId',COALESCE(output->>'originalAssetId',output->>'assetId'),'mutedAt',now()) WHERE id=$1`,[target.id,asset.id,`/api/creation/assets/${asset.id}/file`]);
   return this.detail(workspace,id);
  }
  async setDub(runId,dub) {

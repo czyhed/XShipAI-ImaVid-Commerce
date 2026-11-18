@@ -1,4 +1,5 @@
-export const PRODUCTS_KEY = 'sj:prototype:products:v1';
+// 旧原型示例模块，仅历史参考。活动 React 应用不导入本文件；商品记录只经
+// GET/POST/PATCH /api/creation/products 存取，不再读写浏览器存储。
 export const PRODUCT_STATES = { draft: '草稿', pending: '待核实', confirmed: '已确认' };
 
 export const PRODUCT_SEED = [
@@ -12,20 +13,13 @@ export const now = () => new Date().toISOString();
 export const formatDate = value => new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 export const newId = () => crypto.randomUUID();
 
+// 只返回示例数据；记录级持久化已迁到服务端，这里不读取也不写入浏览器存储。
 export function loadProducts() {
-  let products = structuredClone(PRODUCT_SEED);
-  let warning = '';
-  try {
-    const saved = JSON.parse(localStorage.getItem(PRODUCTS_KEY) || 'null');
-    if (Array.isArray(saved) && saved.every(p => p && typeof p.id === 'string' && typeof p.name === 'string' && Array.isArray(p.params) && PRODUCT_STATES[p.status])) products = saved;
-  } catch { warning = '本地资料暂时无法读取。当前显示示例，请检查浏览器存储权限。'; }
-  return { products, warning };
+  return { products: structuredClone(PRODUCT_SEED), warning: '' };
 }
 
-export function saveProducts(products) {
-  try { localStorage.setItem(PRODUCTS_KEY, JSON.stringify(products)); return true; }
-  catch { return false; }
-}
+// 兼容旧调用：商品保存请走 /api/creation/products，本地保存不再生效。
+export function saveProducts() { return false; }
 
 export function productPrice(p) {
   if (p.price === '' || p.price == null) return '未录入';

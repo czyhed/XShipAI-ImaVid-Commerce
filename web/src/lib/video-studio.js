@@ -126,10 +126,12 @@ export function shotIssues({ task, edges, tasks, runs, assets, assetsLoaded, dub
  if (tagSegments(task.prompt, analysis).some(part => part.type === 'tag' && part.status === 'removed')) add('deleted', '提示词引用了已移除的素材');
  // 台词配音：只有后期配音 / 口型同步且有台词时才需要配音。
  if (['post', 'lipsync'].includes(task.dubMode) && textOf(task.dialogue)) {
-  if (!dub || dub.status === 'none') add('dub', '配音未合成');
+  if (dub?.pending) add('dub', '配音合成中');
+  else if (!dub || dub.status === 'none') add('dub', '待配音');
   else if (dub.status === 'stale') add('dub', '配音已过期');
+  else if (dub.dub?.status === 'running') add('dub', '混音中');
   else if (dub.dub?.status === 'failed') add('dub', '混音失败');
-  else if (dub.needsMix) add('dub', '配音待混音');
+  else if (dub.needsMix) add('dub', '待混音');
  }
  const last = runs.filter(r => r.taskId === task.id).at(-1);
  if (last?.status === 'failed') add('failed', '上次失败');

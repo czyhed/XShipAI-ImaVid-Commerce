@@ -131,10 +131,12 @@ test('issues: missing material per mode, tail waiting, deleted assets, dub state
   // 配音：未合成 / 已过期 / 混音失败 / 待混音；不配音的不提示。
   const dubbed = video('d', { videoMode: 'text', dubMode: 'post', dialogue: [{ text: '你好', language: 'zh' }] });
   const dubLabels = dub => labels({ ...base, task: dubbed, tasks: [dubbed], edges: [], dub });
-  assert.deepEqual(dubLabels(null), ['配音未合成']);
+  assert.deepEqual(dubLabels(null), ['待配音']);
+  assert.deepEqual(dubLabels({ pending: true }), ['配音合成中']);
   assert.deepEqual(dubLabels({ status: 'stale' }), ['配音已过期']);
+  assert.deepEqual(dubLabels({ status: 'fresh', dub: { status: 'running' } }), ['混音中']);
   assert.deepEqual(dubLabels({ status: 'fresh', dub: { status: 'failed' } }), ['混音失败']);
-  assert.deepEqual(dubLabels({ status: 'fresh', needsMix: true }), ['配音待混音']);
+  assert.deepEqual(dubLabels({ status: 'fresh', needsMix: true }), ['待混音']);
   assert.deepEqual(dubLabels({ status: 'fresh' }), []);
   assert.deepEqual(labels({ ...base, task: { ...dubbed, dubMode: 'none' }, tasks: [], edges: [], dub: null }), []);
   // 上次失败；之后成功就不再提示。

@@ -1,6 +1,7 @@
 /* 角色与音色面板、台词配音、原声 / 配音切换。沿用浅色蓝色体系。 */
-.vr-dialog{width:880px;max-width:100%}
-.vr-layout{display:grid;grid-template-columns:200px minmax(0,1fr);gap:14px;min-width:0}
+/* 需要比 .v3-dialog 的 520px 更宽，用双类名提高优先级，避免受样式表加载顺序影响。 */
+.v3-dialog.vr-dialog{width:min(1060px,100%)}
+.vr-layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px;min-width:0}
 .vr-roles{display:flex;flex-direction:column;gap:8px;min-width:0}
 .vr-roles ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
 .vr-roles li{padding:0;border:0}
@@ -17,7 +18,7 @@
 .vr-tabs button{padding:5px 12px;border-radius:6px;font-size:12px;color:var(--v3-dim)}
 .vr-tabs button.on{background:var(--v3-panel);color:var(--v3-accent);font-weight:600;box-shadow:0 1px 3px rgba(37,49,62,.12)}
 .vr-filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
-.vr-voices{list-style:none;margin:0;padding:0;max-height:300px;overflow:auto;border:1px solid var(--v3-line-soft);border-radius:8px}
+.vr-voices{list-style:none;margin:0;padding:0;max-height:min(58vh,480px);overflow:auto;border:1px solid var(--v3-line-soft);border-radius:8px}
 .vr-voices li{display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--v3-line-soft);flex-wrap:wrap}
 .vr-voices li.on{background:var(--v3-accent-soft)}
 .vr-voice-meta{flex:1;min-width:140px;display:flex;flex-direction:column}

@@ -159,6 +159,11 @@ export class CreationVoice {
   const result = await this.audio.mix({ video, audio });
   return { ...result, bytes: Buffer.from(result.bytes) };
  }
+ // ---- 去音轨（对已生成的视频用 ffmpeg 处理，不调用付费接口）----
+ async stripAudio({ video }) {
+  const result = await this.audio.strip({ video });
+  return { ...result, bytes: result.bytes ? Buffer.from(result.bytes) : null };
+ }
 }
 
 export { RATE_RANGE, clamp };

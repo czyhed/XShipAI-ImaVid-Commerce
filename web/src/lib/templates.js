@@ -1,6 +1,5 @@
-// 预制提示词模板（Issue #21）：只读配置，不调用模型、不产生费用。
-// 模板正文使用 {{占位符}} 语法；art 是自制 CSS/SVG 示意图标记，不含外部 URL。
-// 模板带入项目只写本地草稿（sj:prototype:review:v1），不会确认方案或提交生成。
+// 旧原型预制模板，仅历史参考；活动应用从 GET /api/creation/templates 读取服务端模板，
+// 不导入本文件，也不把模板写入浏览器存储。
 
 export const TEMPLATE_VERSION = 1;
 export const TEMPLATE_CATEGORIES = ['全部', '白底', '场景', '卖点', '促销', '细节', '改图', '视频分镜'];

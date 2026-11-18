@@ -140,7 +140,7 @@ export function Users({ apiCall, authOn, canAdmin, me, notify, openDialog, close
       refresh();
       notify(user.active ? '成员已停用，旧会话立即失效。' : '成员已启用。');
     } catch (error) {
-      notify(error.message || '更新成员状态失败。');
+      notify(error.message || '更新成员状态失败。', 'error');
     }
   }
 
@@ -454,7 +454,7 @@ function Security({ authOn, me, canAdmin }) {
     </section>
     <section className="rv-panel"><h2>当前可用边界</h2>
       <p>成员、账本流水、价格表与审计日志读取真实服务端接口；管理员可创建成员、调账与录入价格。</p>
-      <p className="muted">{authOn ? `已启用账号体系；当前角色${canAdmin ? '可读取成员列表' : '不能读取成员列表'}。` : '未启用账号体系，成员管理不可用；账单与日志按本机单工作空间读取。'}项目、商品与精修审核界面仍多为本地演示；视频执行与真实截图识别尚未接入。</p>
+      <p className="muted">{authOn ? `已启用账号体系；当前角色${canAdmin ? '可读取成员列表' : '不能读取成员列表'}。` : '未启用账号体系，成员管理不可用；账单与日志按本机单工作空间读取。'}</p>
     </section>
   </div>;
 }

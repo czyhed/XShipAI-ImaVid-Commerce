@@ -44,6 +44,11 @@ export function buildMixArgs({ hasAudio }, video, audio, output, { volume = ORIG
  ];
 }
 
+// 纯函数：去音轨参数。视频流直接复制，只丢弃音频，避免二次编码损失画质。
+export function buildStripArgs(video, output) {
+ return ['-i', video, '-map', '0:v:0', '-c:v', 'copy', '-an', '-movflags', '+faststart', '-y', output];
+}
+
 export async function probeAudioDuration(command, file, options = {}) {
  const { stdout } = await run(command, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'json', file], { timeoutMs: 30 * 1000, ...options });
  const seconds = Number(JSON.parse(stdout || '{}').format?.duration);
@@ -81,6 +86,21 @@ export function createAudioRunner({ ffmpegCommand = 'ffmpeg', ffprobeCommand = '
     const bytes = await readFile(output);
     if (!bytes.length) throw new AppError('FFMPEG_FAILED', '台词音频拼接结果为空。', 503);
     return { bytes, durationSec: await probeAudioDuration(ffprobeCommand, output, options), lineDurations };
+   });
+  },
+  // 返回 { bytes(mp4), hasAudio }。原本没有音轨时返回 hasAudio=false、bytes=null，由调用方给出提示。
+  async strip({ video }) {
+   return withDirectory(async directory => {
+    const videoFile = join(directory, 'video.mp4'), output = join(directory, 'muted.mp4');
+    await writeFile(videoFile, video);
+    let clip;
+    try { clip = await probeClip(ffprobeCommand, videoFile, options); }
+    catch (error) { if (error instanceof AppError) throw error; throw new AppError('FFMPEG_UNAVAILABLE', '服务器缺少 ffmpeg，无法处理视频；请联系管理员安装。', 503); }
+    if (!clip.hasAudio) return { bytes: null, hasAudio: false };
+    await exec(ffmpegCommand, buildStripArgs(videoFile, output), { ...options, timeoutMs: 10 * 60 * 1000 });
+    const bytes = await readFile(output);
+    if (!bytes.length) throw new AppError('FFMPEG_FAILED', '去除音轨的结果为空。', 503);
+    return { bytes, hasAudio: true };
    });
   },
   // 返回 { bytes(mp4), truncated, videoSeconds, audioSeconds }。

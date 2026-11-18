@@ -39,7 +39,7 @@ export function CreationCosts({backend}){
  const usage=usePage({request:backend.apiCall,owner:backend.session?.user?.id||backend.session?.user?.email||'local',path:'/api/creation/usage',size:USAGE_PAGE_SIZE,offset,setOffset});
  const reload=()=>{refresh();usage.reload();};
  const rows=usage.items.map(r=>r.source==='model'?{...r,projectName:STAGE_LABEL[r.stage]||'模型调用'}:r);
- return <section className="rv-panel"><div className="rv-panel-title"><h2>实际用量与成本</h2><Btn onClick={reload} disabled={loading||usage.loading}>刷新</Btn></div><p>按供应商返回的实际金额记录；未提供金额时显示「未统计」。</p>{(error||usage.error)&&<p role="alert">{error||usage.error}</p>}
+ return <section className="rv-panel"><div className="rv-panel-title"><h2>实际用量与成本</h2><Btn onClick={reload} disabled={loading||usage.loading}>刷新</Btn></div>{(error||usage.error)&&<p role="alert">{error||usage.error}</p>}
  {hidden?<p>当前角色不显示费用明细。</p>:<p>{data?.costs?.totals?.length?data.costs.totals.map(t=><strong key={t.currency} style={{marginRight:20}}>{t.currency} {(t.costMicros/1e6).toFixed(4)}</strong>):'金额未统计'}　{data?.costs?.unknown??'—'} 条费用未统计</p>}
  <div className="rv-table-wrap"><table className="rv-table"><thead><tr><th>项目 / 任务</th><th>状态</th>{!hidden&&<th>用量</th>}{!hidden&&<th>实际金额</th>}<th>时间</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{r.projectName||'未命名项目'}<small>{r.taskId}</small></td><td>{STATUS[r.status]||(r.status==='recorded'?'已记录':r.status)}</td>{!hidden&&<td>{usageLabel(r.usage)}</td>}{!hidden&&<td>{r.costMicros==null?'未统计':`${r.currency||'未提供币种'} ${(r.costMicros/1e6).toFixed(4)}`}</td>}<td>{date(r.createdAt)}</td></tr>)}</tbody></table></div>
  {!usage.loading&&!usage.error&&!rows.length&&<p className="rv-empty">暂无生成记录。</p>}
@@ -100,20 +100,20 @@ function RecentProjects({projects,loading,onOpenProject,onNav}){
     </button></li>)}</ul>}
  </section>;
 }
-export default function CreationDashboard({backend,onNewProject,onNav,onOpenProject}){
+export default function CreationDashboard({backend,notify,onNewProject,onNav,onOpenProject}){
  const {data,error,loading,refresh,updatedAt}=useOverview(backend,{pollMs:5000});
  const [now,setNow]=useState(()=>Date.now());
  useEffect(()=>{const timer=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer);},[]);
+ useEffect(()=>{if(error)notify?.(error,'error');},[error,notify]);
  const metrics=data?.metrics,runs=data?.runs||[];
  const live=runs.filter(r=>LIVE.includes(r.status));
  const pending=runs.filter(r=>PENDING.includes(r.status));
  const open=id=>{if(id)onOpenProject?.(id);};
   return <section className="view rv dash-v3" data-creation-dashboard>
   <header className="dash-top">
-   <div className="dash-top-main"><h1>工作台</h1><p>运行中的任务、待处理记录与最近项目。</p></div>
+   <div className="dash-top-main"><h1>工作台</h1></div>
    <div className="dash-top-actions"><Summary metrics={metrics} loading={loading}/><span className="dash-stamp" data-dash-updated title="每 5 秒自动刷新">{loading&&data?'刷新中…':updatedAt?`更新于 ${clock(updatedAt)}`:loading?'读取中…':'—'}</span><Btn small ghost onClick={refresh} disabled={loading}>刷新</Btn><Btn small primary onClick={()=>onNewProject()}>＋ 新建项目</Btn></div>
   </header>
-  {error&&<div className="dash-alert" role="alert">{error}</div>}
   <div className="dash-cols">
    <LivePanel runs={live} loading={loading&&!data} now={now} onOpenProject={open} onNav={onNav}/>
    <PendingPanel runs={pending} loading={loading&&!data} onOpenProject={open}/>

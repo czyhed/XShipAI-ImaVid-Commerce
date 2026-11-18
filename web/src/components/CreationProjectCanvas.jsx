@@ -108,6 +108,8 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
  const [refine, setRefine] = useState(null), [tool, setTool] = useState('pan'), [zoomPct, setZoomPct] = useState(100), [displayRun, setDisplayRunMap] = useState({});
  const draftRef = useRef(null), detailRef = useRef(null), busyRef = useRef(false), flow = useRef(null), queueRef = useRef(null), epoch = useRef(0), live = useRef({}), undoRef = useRef([]), redoRef = useRef([]), canvasBox = useRef(null), gestureRef = useRef(false), pointerDownRef = useRef(false), renderedRef = useRef(''); const [layoutTick, bumpLayoutTick] = useState(0);
  const selectedId = selected[0] || null;
+ // 页面级错误统一走顶部提示；画布无法加载时仍保留整页重试。
+ const fail = useCallback(message => { setError(message || ''); if (message) notify?.(message, 'error'); }, [notify]);
  // 素材不再整表读取：只缓存画布引用到的素材（按编号批量查询）与选择器里读到 / 刚上传的素材；名称显示与「引用的素材已删除」检测都基于它。
  const owner = backend?.session?.user?.id || backend?.session?.user?.email || 'local';
  const assets = useMemo(() => Object.values(assetMap), [assetMap]);
@@ -144,7 +146,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   const shared = reuseUnchanged(draftRef.current, next);
   draftRef.current = shared; setDraft(shared); setLoaded(true);
  }, []);
- const reload = useCallback(async () => { try { const data = await creationRequest(backend, base); accept(data); setError(''); return data; } catch (e) { setError(e.message); setLoaded(true); throw e; } }, [base, backend?.csrf, accept]);
+ const reload = useCallback(async () => { try { const data = await creationRequest(backend, base); accept(data); fail(''); return data; } catch (e) { fail(e.message); setLoaded(true); throw e; } }, [base, backend?.csrf, accept]);
  // 静默刷新（标签页切回、他处编辑后）：期间若已有保存确认（epoch 变化），丢弃这份可能过期的详情。
  const refresh = useCallback(async () => {
   const mark = epoch.current;
@@ -156,7 +158,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   const queue = new SaveQueue({
    send: (ops, { keepalive } = {}) => creationRequest(live.current.backend, `${live.current.base}/ops`, { ops }, 'POST', { keepalive }),
    onResult: data => accept(data),
-   onReject: error => { setError(error.message); refresh(); },
+   onReject: error => { fail(error.message); refresh(); },
    onStatus: setSaveState,
   });
   queueRef.current = queue;
@@ -165,7 +167,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
  // 画布节点与视频工作台分镜卡片共用的编辑接口：读写同一份项目草稿与 change()，两处即时一致。
  function buildEditor() {
   const shots = computeShotMap(draft, runs);
-  return { tasks: draft.tasks, edges: draft.edges, assets, assetsLoaded, owner, rememberAssets, models, channels: hub.channels, defaults: hub.defaults, runs, busy, displayRuns: displayRun, shots, shotOf: id => shots[id] || null, captureTail: captureTail, voiceRoles: draft.voiceRoles || [], voiceConfigured, dubStates: detail?.dubStates || {}, dubState: id => detail?.dubStates?.[id] || null, synthesizeDialogue, remixDub, speedUpRoles, openRoles: () => setRolesOpen(true), storyboard: () => draftRef.current?.storyboard || null, patchStoryboard, setProjectSetting, attachMaterial, detachMaterial, uploadAsset, setDisplayRun, flush, edit: editNode, run: runTasks, duplicate: duplicateTask, remove: deleteTask, removeEdge, removeEdges, latest: id => draftRef.current?.tasks.find(t => t.id === id), request: path => creationRequest(backend, path), uploadMedia: (e, id, file) => addFile(e, 'creative', id, file), openRefine: (taskId, runId) => setRefine({ mode: 'create', taskId, runId }), redrawMask: taskId => setRefine({ mode: 'redraw', taskId }), upload: (e, id) => addFile(e, 'creative', id), openProduct: draft.productId && onOpenProduct ? () => onOpenProduct(draft.productId) : null };
+  return { tasks: draft.tasks, edges: draft.edges, assets, assetsLoaded, owner, rememberAssets, models, channels: hub.channels, defaults: hub.defaults, runs, busy, displayRuns: displayRun, shots, shotOf: id => shots[id] || null, captureTail: captureTail, voiceRoles: draft.voiceRoles || [], voiceConfigured, dubStates: detail?.dubStates || {}, dubState: id => detail?.dubStates?.[id] || null, synthesizeDialogue, generateDialogue, remixDub, stripAudio, speedUpRoles, openRoles: () => setRolesOpen(true), storyboard: () => draftRef.current?.storyboard || null, patchStoryboard, setProjectSetting, attachMaterial, detachMaterial, uploadAsset, setDisplayRun, flush, refresh, edit: editNode, run: runTasks, duplicate: duplicateTask, remove: deleteTask, removeEdge, removeEdges, latest: id => draftRef.current?.tasks.find(t => t.id === id), request: path => creationRequest(backend, path), uploadMedia: (e, id, file) => addFile(e, 'creative', id, file), openRefine: (taskId, runId) => setRefine({ mode: 'create', taskId, runId }), redrawMask: taskId => setRefine({ mode: 'redraw', taskId }), upload: (e, id) => addFile(e, 'creative', id), openProduct: draft.productId && onOpenProduct ? () => onOpenProduct(draft.productId) : null };
  }
  const voiceConfigured = hub.channels.some(c => c.adapter === 'volcengine-tts' && c.enabled);
  // 台词配音：先保存画布草稿，再按行合成（少量语音字符费用）；结果写在服务端节点上。
@@ -173,9 +175,19 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   await flush();
   accept(await creationRequest(backend, base + '/voice/dialogue', { taskId }));
  }
+ // AI 写台词：先保存草稿，只调用文本模型写入台词；不合成配音。
+ async function generateDialogue(taskIds) {
+  await flush();
+  accept(await creationRequest(backend, base + '/storyboard/generate-dialogue', taskIds?.length ? { taskIds } : {}));
+ }
  async function remixDub(taskId) {
   await flush();
   accept(await creationRequest(backend, base + '/voice/remix', { taskId }));
+ }
+ // 去音轨：对已生成的视频用服务端 ffmpeg 处理，不消耗积分，也不重新生成。
+ async function stripAudio(taskId) {
+  await flush();
+  accept(await creationRequest(backend, base + '/voice/strip-audio', { taskId }));
  }
  // 「加快语速」：提高所用角色的语速并提示重新合成。
  async function speedUpRoles(ids) {
@@ -399,7 +411,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   if (!writable) return;
   const current = draftRef.current, edge = current.edges.find(e => e.id === edgeId), runsNow = detailRef.current?.runs || [];
   if (!edge) return;
-  if (runsNow.some(r => r.taskId === edge.target && isActive(r.status))) { setError('运行中的分镜不能修改素材。'); return; }
+  if (runsNow.some(r => r.taskId === edge.target && isActive(r.status))) { fail('运行中的分镜不能修改素材。'); return; }
   change(studioDetach(current, runsNow, edgeId));
  }
  // 上传一个素材到项目（创作素材），不绑定到任何节点；失败时抛出，由调用方显示。
@@ -411,15 +423,15 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
  function undo() { if (!writable || !undoRef.current.length) return; redoRef.current.push(snapshot()); applySnapshot(undoRef.current.pop()); }
  function redo() { if (!writable || !redoRef.current.length) return; undoRef.current.push(snapshot()); applySnapshot(redoRef.current.pop()); }
  async function work(action) {
-  if (busyRef.current) return null; busyRef.current = true; setBusy(true); setError('');
+  if (busyRef.current) return null; busyRef.current = true; setBusy(true); fail('');
   try { return await action(); }
-  catch (e) { setError(e.message); return null; }
+  catch (e) { fail(e.message); return null; }
   finally { busyRef.current = false; setBusy(false); }
  }
  function editNode(id, patch) {
   const current = draftRef.current;
   if (!writable || !current?.tasks.some(t => t.id === id)) return;
-  if (detailRef.current.runs.some(r => r.taskId === id && isActive(r.status))) { setError('运行中的节点不能修改执行输入。'); return; }
+  if (detailRef.current.runs.some(r => r.taskId === id && isActive(r.status))) { fail('运行中的节点不能修改执行输入。'); return; }
   let nextEdges = current.edges;
   const node = current.tasks.find(t => t.id === id);
   if (patch.sourceAssetId && ['image', 'product'].includes(node.kind) && !nextEdges.some(e => e.source === id)) {
@@ -439,8 +451,8 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
  }
  function removeWorkflow() {
   if (!writable || !currentWorkflow) return;
-  if (draft.workflows.length === 1) { setError('项目至少保留一个创作任务。'); return; }
-  if (runs.some(r => scope.owned.has(r.taskId)) || draft.edges.some(e => scope.owned.has(e.source) && !scope.owned.has(e.target))) { setError('任务已有运行记录或被其他任务引用，不能删除。'); return; }
+  if (draft.workflows.length === 1) { fail('项目至少保留一个创作任务。'); return; }
+  if (runs.some(r => scope.owned.has(r.taskId)) || draft.edges.some(e => scope.owned.has(e.source) && !scope.owned.has(e.target))) { fail('任务已有运行记录或被其他任务引用，不能删除。'); return; }
   if (!window.confirm(`删除创作任务「${currentWorkflow.title}」及其流程？`)) return;
   change({ ...draft, workflows: draft.workflows.filter(w => w.id !== currentWorkflow.id), tasks: draft.tasks.filter(t => !scope.owned.has(t.id)), edges: draft.edges.filter(e => !scope.owned.has(e.source) && !scope.owned.has(e.target)) });
   setWorkflowId(null); selectNodes([]);
@@ -462,24 +474,24 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   if (!writable || !connection.source || !connection.target) return;
   const source = draft.tasks.find(t => t.id === connection.source), target = draft.tasks.find(t => t.id === connection.target);
   const out = portDef(source?.kind, 'outs', connection.sourceHandle), input = portDef(target?.kind, 'ins', connection.targetHandle);
-  if (!out || !input || out[1] !== input[1] || connection.source === connection.target) { setError('端口类型不匹配，不能连接。'); return; }
-  if (!input[2] && draft.edges.some(e => e.target === connection.target && e.targetHandle === connection.targetHandle)) { setError('该输入端口只能连接一条连线。'); return; }
-  if (['generate', 'edit'].includes(target.kind) && input[1] === 'image' && draft.edges.filter(e => e.target === target.id && e.targetHandle === connection.targetHandle).length >= MAX_REFERENCES) { setError(`每个生图 / 改图节点最多连接 ${MAX_REFERENCES} 张参考图。`); return; }
+  if (!out || !input || out[1] !== input[1] || connection.source === connection.target) { fail('端口类型不匹配，不能连接。'); return; }
+  if (!input[2] && draft.edges.some(e => e.target === connection.target && e.targetHandle === connection.targetHandle)) { fail('该输入端口只能连接一条连线。'); return; }
+  if (['generate', 'edit'].includes(target.kind) && input[1] === 'image' && draft.edges.filter(e => e.target === target.id && e.targetHandle === connection.targetHandle).length >= MAX_REFERENCES) { fail(`每个生图 / 改图节点最多连接 ${MAX_REFERENCES} 张参考图。`); return; }
   // 视频节点：与服务端相同的单端口上限和参考合计 12；其余组合（如只有参考音频）交给执行预览判断。
-  if (target.kind === 'video') { const issue = videoConnectIssue(target, connection.targetHandle, draft.edges, draft.tasks); if (issue) { setError(issue); return; } }
+  if (target.kind === 'video') { const issue = videoConnectIssue(target, connection.targetHandle, draft.edges, draft.tasks); if (issue) { fail(issue); return; } }
   const nextEdges = [...draft.edges, { id: uid(), source: connection.source, sourceHandle: connection.sourceHandle, target: connection.target, targetHandle: connection.targetHandle }];
   const seen = new Set();
   const reaches = id => { if (id === connection.source) return true; if (seen.has(id)) return false; seen.add(id); return nextEdges.filter(e => e.source === id).some(e => reaches(e.target)); };
-  if (reaches(connection.target)) { setError('连线会形成循环依赖。'); return; }
-  if (runs.some(r => r.taskId === target.id && isActive(r.status))) { setError('运行中的节点不能修改连线。'); return; }
+  if (reaches(connection.target)) { fail('连线会形成循环依赖。'); return; }
+  if (runs.some(r => r.taskId === target.id && isActive(r.status))) { fail('运行中的节点不能修改连线。'); return; }
   // 多参考图端口保留已有的固定版本与素材（服务端会拒绝失效的固定）；单图端口沿用清空旧选择。
   change({ ...draft, edges: nextEdges, tasks: draft.tasks.map(t => t.id === target.id && !input[2] && (target.kind !== 'video' || connection.targetHandle === 'first') ? { ...t, sourceRunId: null, ...(target.kind === 'video' ? {} : { sourceRunIds: [] }), sourceAssetId: null } : t) });
  }
  function deleteTask(id) {
   if (!writable || id?.startsWith('result:')) return;
   const item = draft.tasks.find(t => t.id === id); if (!item) return;
-  if (runs.some(r => r.taskId === id)) { setError('已有生成记录的节点不能删除。'); return; }
-  if (runs.some(r => r.taskId === id && isActive(r.status))) { setError('运行中的节点不能删除。'); return; }
+  if (runs.some(r => r.taskId === id)) { fail('已有生成记录的节点不能删除。'); return; }
+  if (runs.some(r => r.taskId === id && isActive(r.status))) { fail('运行中的节点不能删除。'); return; }
   change({ ...draft, tasks: draft.tasks.filter(t => t.id !== id), edges: draft.edges.filter(e => e.source !== id && e.target !== id) });
   selectNodes([]);
  }
@@ -508,7 +520,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   notify?.(regular.length ? '已开始运行' : '合成完成');
  }
  async function runTasks(ids, options = {}) {
-  if (!ids.length) { setError('请先选择要运行的节点。'); return; }
+  if (!ids.length) { fail('请先选择要运行的节点。'); return; }
   await work(async () => {
    await flush();
    const data = await creationRequest(backend, base + '/preview', { taskIds: ids, retryTaskIds: options.retry || [], regenerateTaskIds: options.regenerate || [] });
@@ -567,11 +579,13 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   await runTasks(ids, { retry: ids, direct: true });
  }
  async function suggest() {
+  setPlanning(false);
+  notify?.('正在生成安排，完成后会显示待确认方案');
   await work(async () => {
    await flush();
    const data = await creationRequest(backend, base + '/suggest', { instructions, allowVideo, requestKey: uid() });
    accept(data); setPlanning(false);
-   if (data.suggestion?.status === 'failed') setError(data.suggestion.error);
+   if (data.suggestion?.status === 'failed') fail(data.suggestion.error);
   });
  }
  async function applyProposal(proposal) {
@@ -673,15 +687,13 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
    <button className={view !== 'video' ? 'on' : ''} onClick={() => onSwitchView?.('canvas')}>画布</button>
    <button className={view === 'video' ? 'on' : ''} onClick={() => onSwitchView?.('video')}>视频工作台</button>
    <span className="v3-grow" />
-   <span className="v3-viewtabs-note">视频工作台：脚本 → 分镜 → 逐镜生成 → 拼接成片</span>
   </nav>
   {rolesOpen && <VoiceRolesPanel roles={draft.voiceRoles || []} configured={voiceConfigured} writable={writable} owner={owner} onAssets={rememberAssets} request={(path, body) => creationRequest(backend, path, body)} onSave={saveRoles} onClose={() => setRolesOpen(false)} />}
-  {error && <div className="v3-alert" role="alert">{error}<button aria-label="关闭" onClick={() => setError('')}>×</button></div>}
   {view === 'video' ? <CreationVideoStudio backend={backend} notify={notify} projectId={projectId} detail={detail} draft={draft} editor={buildEditor()} flush={flush} accept={accept} busy={busy} writable={writable} creationRequest={creationRequest} fileUrl={fileUrl} openPreview={data => setPreview(data)} />
    : <>
   <div className="task-workspace">
    <aside className="creative-task-list" aria-label="创作任务">
-    <header><div><h2>创作任务 <small>{draft.workflows.length}</small></h2><p>选择任务，编辑完整流程</p></div><button className="v3-btn primary" disabled={!writable || busy} onClick={() => setNewWorkflow(true)}>＋ 新增任务</button></header>
+    <header><div><h2>创作任务 <small>{draft.workflows.length}</small></h2></div><button className="v3-btn primary" disabled={!writable || busy} onClick={() => setNewWorkflow(true)}>＋ 新增任务</button></header>
     <input type="search" aria-label="搜索任务" placeholder="搜索任务" value={taskQuery} onChange={e => setTaskQuery(e.target.value)} />
     <div className="creative-task-items">{draft.workflows.filter(w => w.title.toLowerCase().includes(taskQuery.toLowerCase())).map(w => {
      const members = draft.tasks.filter(t => t.workflowId === w.id), history = runs.filter(r => members.some(t => t.id === r.taskId));
@@ -759,7 +771,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   </section>
    </div></div>
    </>}
-  {newWorkflow && <div className="v3-overlay"><form className="v3-dialog" role="dialog" aria-modal="true" aria-label="新增创作任务" onSubmit={addWorkflow}><header><h2>新增创作任务</h2><button type="button" aria-label="关闭" onClick={() => setNewWorkflow(false)}>×</button></header><label className="v3-field"><span>任务名称</span><input autoFocus required maxLength={100} value={workflowName} onChange={e => setWorkflowName(e.target.value)} placeholder="例如：秋日场景主图" /></label><label className="v3-field"><span>任务类型</span><select value={workflowKind} onChange={e => setWorkflowKind(e.target.value)}><option value="generate">图片生成</option><option value="edit">图片修改</option><option value="video">视频生成</option><option value="composite">图片合成</option></select></label><p className="v3-note">创建后，在画布中修改参考图、提示词与生成参数。</p><footer><button type="button" className="v3-btn" onClick={() => setNewWorkflow(false)}>取消</button><button className="v3-btn primary">创建任务</button></footer></form></div>}
+  {newWorkflow && <div className="v3-overlay"><form className="v3-dialog" role="dialog" aria-modal="true" aria-label="新增创作任务" onSubmit={addWorkflow}><header><h2>新增创作任务</h2><button type="button" aria-label="关闭" onClick={() => setNewWorkflow(false)}>×</button></header><label className="v3-field"><span>任务名称</span><input autoFocus required maxLength={100} value={workflowName} onChange={e => setWorkflowName(e.target.value)} placeholder="例如：秋日场景主图" /></label><label className="v3-field"><span>任务类型</span><select value={workflowKind} onChange={e => setWorkflowKind(e.target.value)}><option value="generate">图片生成</option><option value="edit">图片修改</option><option value="video">视频生成</option><option value="composite">图片合成</option></select></label><footer><button type="button" className="v3-btn" onClick={() => setNewWorkflow(false)}>取消</button><button className="v3-btn primary">创建任务</button></footer></form></div>}
   {refine && (() => { const task = draft.tasks.find(t => t.id === refine.taskId); const baseId = refine.mode === 'redraw' ? (runs.find(r => r.id === task?.sourceRunId)?.output?.assetId || task?.sourceAssetId) : runs.find(r => r.id === refine.runId)?.output?.assetId; return baseId ? <MaskEditor assetId={baseId} title={refine.mode === 'redraw' ? '重新绘制蒙版' : '局部精修'} confirmLabel={refine.mode === 'redraw' ? '保存蒙版' : '确认并预览'} initialInstruction={refine.mode === 'redraw' ? task?.prompt || '' : ''} onCancel={() => setRefine(null)} onConfirm={submitRefine} /> : null; })()}
   {preview && <div className="v3-overlay"><div className="v3-dialog" role="dialog" aria-modal="true" aria-label="执行范围预览"><header><h2>执行范围</h2><button aria-label="关闭" onClick={() => setPreview(null)}>×</button></header><ol>{preview.scope.map(entry => <li key={entry.taskId}><div><strong>{entry.title}</strong><span>{entry.action === 'blocked' ? '需要处理' : entry.action === 'reuse' ? '复用成功版本' : entry.action === 'recover' ? '继续查询原任务' : entry.action === 'retry-confirm' ? '待确认重试' : entry.action === 'composite' ? '本地合成' : '新生成'}</span></div>{entry.reason && <p>{entry.reason}</p>}{entry.estimatedPoints > 0 && <p className="pv-points">预估 {pointText(entry.estimatedPoints)}</p>}{entry.dialogueWarning && <p className="pv-warn">{entry.dialogueWarning}</p>}</li>)}</ol>{preview.estimatedPoints > 0 && <div className="pv-summary" aria-label="积分预估"><div><span>预估合计</span><strong>{pointText(preview.estimatedPoints)}</strong></div><div><span>可用积分</span><strong>{preview.balance ? pointText(preview.balance.available) : '余额未知'}</strong></div>{preview.balanceReason && <p className="pv-short" role="alert">{preview.balanceReason}</p>}</div>}<footer><button className="v3-btn" onClick={() => setPreview(null)}>取消</button><button className="v3-btn primary" disabled={!preview.canStart || busy || !writable} onClick={() => { const data = preview; setPreview(null); work(() => startPreview(data)); }}>开始</button></footer></div></div>}
   {planning && <div className="v3-overlay"><div className="v3-dialog" role="dialog" aria-modal="true" aria-label="AI 安排"><header><h2>AI 安排</h2><button aria-label="关闭" onClick={() => setPlanning(false)}>×</button></header><label className="v3-field"><span>创作要求</span><textarea autoFocus rows={6} maxLength={8000} value={instructions} onChange={e => setInstructions(e.target.value)} placeholder="例如：再补两张衣柜场景图，突出防尘盖" /></label><label className="v3-check"><input type="checkbox" checked={allowVideo} onChange={e => setAllowVideo(e.target.checked)} />包含视频任务</label><footer><button className="v3-btn" onClick={() => setPlanning(false)}>取消</button><button className="v3-btn primary" disabled={!instructions.trim() || busy || !writable} onClick={suggest}>{busy ? '正在安排…' : '生成安排'}</button></footer></div></div>}

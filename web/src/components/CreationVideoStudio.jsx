@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import '../styles/creation-video-studio.css';
 import { ConfirmDialog } from './ui.jsx';
 import DraftText from './DraftText.jsx';
@@ -47,15 +47,18 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
  const sb = canvasDraft?.storyboard || null;
  const draft = { ...server, script: local.script, shots: local.shots.map(shot => ({ ...shot, tailFrameStale: server.shots.find(s => s.id === shot.id)?.tailFrameStale })) };
  const [error, setError] = useState(''), [saving, setSaving] = useState(false), [instructions, setInstructions] = useState('');
+ const [generatingDialogue, setGeneratingDialogue] = useState(false);
  const [confirmShot, setConfirmShot] = useState(null), [batchPlan, setBatchPlan] = useState(null), [burnSubtitles, setBurnSubtitles] = useState(false);
  const [selectedId, setSelectedId] = useState(null), [drawerChoice, setDrawerChoice] = useState(undefined), [player, setPlayer] = useState(false), [picker, setPicker] = useState(null);
  const [sections, setSections] = useState(SECTION_DEFAULT), [flash, setFlash] = useState(''), [focusReq, setFocusReq] = useState(null), [advancedOpen, setAdvancedOpen] = useState(false), [durationError, setDurationError] = useState('');
  const promptBox = useRef(null);
+ // 页面级错误统一走顶部提示；时长等字段错误仍留在输入框旁。
+ const fail = useCallback(message => { setError(message || ''); if (message) notify?.(message, 'error'); }, [notify]);
  const nodeOf = shot => (shot?.nodeId ? canvasDraft?.tasks.find(t => t.id === shot.nodeId) : null) || null;
  const plainShots = () => (editor.storyboard()?.shots || []).map(({ id, title, description, nodeId }) => ({ id, title, description, nodeId: nodeId || null }));
  const patchShots = update => editor.patchStoryboard({ shots: update(plainShots()) });
  const patchShot = (shotId, patch) => patchShots(shots => shots.map(s => s.id === shotId ? { ...s, ...patch } : s));
- useEffect(() => { setError(server.scriptRequest?.status === 'failed' ? server.scriptRequest.error || '' : server.shotsRequest?.status === 'failed' ? server.shotsRequest.error || '' : ''); }, [server.scriptRequest?.status, server.shotsRequest?.status]);
+ useEffect(() => { fail(server.scriptRequest?.status === 'failed' ? server.scriptRequest.error || '' : server.shotsRequest?.status === 'failed' ? server.shotsRequest.error || '' : ''); }, [server.scriptRequest?.status, server.shotsRequest?.status]);
 
  // 状态按最近一次运行；预览按用户选择的版本（默认最新成功版本），上次失败时仍可看到之前的成功版本。
  const shotState = shot => {
@@ -85,9 +88,9 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
 
  async function guard(fn) {
   if (busy || saving) return null;
-  setSaving(true); setError('');
+  setSaving(true); fail('');
   try { return await fn(); }
-  catch (e) { setError(e.message); return null; }
+  catch (e) { fail(e.message); return null; }
   finally { setSaving(false); }
  }
  const generateScript = () => guard(async () => {
@@ -98,6 +101,12 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
   await flush();
   accept(await creationRequest(backend, base + '/storyboard/generate-shots', { requestKey: uid() }));
   notify?.('分镜建议已生成，请确认后应用到画布');
+ });
+ // AI 生成全片台词：只写台词文本，不自动合成配音。
+ const generateDialogue = () => guard(async () => {
+  setGeneratingDialogue(true);
+  try { await editor.generateDialogue(); notify?.('台词已生成，请检查后再合成配音'); }
+  finally { setGeneratingDialogue(false); }
  });
  // 建议只是预览：「应用」才创建分镜和画布节点，「放弃」只标记建议作废。
  const applySuggestion = () => guard(async () => {
@@ -126,10 +135,17 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
  const runShot = (shot, { regenerate = false } = {}) => guard(async () => {
   await flush();
   const nodeId = editor.storyboard()?.shots?.find(s => s.id === shot.id)?.nodeId;
-  if (!nodeId) { setError('分镜还没有同步到画布，请稍后再试。'); return; }
+  if (!nodeId) { fail('分镜还没有同步到画布，请稍后再试。'); return; }
   const failed = shotState(shot).status === 'failed';
   const data = await creationRequest(backend, base + '/preview', { taskIds: [nodeId], ...(failed ? { retryTaskIds: [nodeId] } : {}), ...(regenerate ? { regenerateTaskIds: [nodeId] } : {}) });
   openPreview?.(data);
+ });
+ // 去音轨：对已生成视频用服务端 ffmpeg 去掉音轨，不消耗积分，也不重新生成。
+ const stripShot = (shot, runId) => guard(async () => {
+  const nodeId = editor.storyboard()?.shots?.find(s => s.id === shot.id)?.nodeId;
+  if (!nodeId) { fail('分镜还没有同步到画布，请稍后再试。'); return; }
+  accept(await creationRequest(backend, base + '/voice/strip-audio', { taskId: nodeId, ...(runId ? { runId } : {}) }));
+  notify?.('已去除音轨，可以继续合成配音');
  });
  const removeShot = shot => guard(async () => {
   const index = draft.shots.findIndex(s => s.id === shot.id);
@@ -142,7 +158,7 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
 
  // 批量生成：先保存，再弹出批次预览（每镜预估积分、合计、余额、等待上一镜的分镜）。
  const openBatchPreview = () => guard(async () => {
-  if (!draft.shots.length) { setError('请先添加分镜。'); return; }
+  if (!draft.shots.length) { fail('请先添加分镜。'); return; }
   const saved = await flush();
   const synced = (saved.project.storyboard?.shots || []).filter(shot => shot.nodeId).map(shot => shot.id);
   setBatchPlan(await creationRequest(backend, base + '/storyboard/batch/preview', { shotIds: synced }));
@@ -248,7 +264,7 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
       <label className="v3-field"><span>视频提示词<span className="count">{(node.prompt || '').length} / 20000</span></span><DraftText ref={promptBox} multiline aria-label="视频提示词" rows={3} maxLength={20000} value={node.prompt || ''} disabled={lock} onCommit={prompt => change({ prompt })} placeholder="给视频模型的画面提示词；点击上方素材卡片可插入 <Picture N> 等标签" /></label>
       <VideoTagPreview task={node} analysis={analysis} locked={lock} change={change} editor={editor} />
      </Section>
-     <Section id="dialogue" flash={flash === 'dialogue'} title="台词与配音" open={sections.dialogue} onToggle={toggle('dialogue')} badge={<small className="vs-sec-badge">{dialogueCount ? `${dialogueCount} 句` : '无台词'}{dub?.status === 'fresh' ? ' · 已配音' : dub?.status === 'stale' ? ' · 已过期' : ''}</small>}>
+     <Section id="dialogue" flash={flash === 'dialogue'} title="台词与配音" open={sections.dialogue} onToggle={toggle('dialogue')} badge={<small className="vs-sec-badge">{dialogueCount ? `${dialogueCount} 句${['post', 'lipsync'].includes(node.dubMode) ? ` · ${dub?.pending ? '配音合成中' : dub?.status === 'none' ? '待配音' : dub?.status === 'stale' ? '配音已过期' : dub?.dub?.status === 'running' ? '混音中' : dub?.dub?.status === 'failed' ? '混音失败' : dub?.needsMix ? '待混音' : dub?.status === 'fresh' ? '已配音' : ''}` : ''}` : '无台词'}</small>}>
       <VideoDialogue task={node} duration={shotDuration(sb, node)} locked={lock} change={change} editor={editor} />
       {!(editor.voiceRoles || []).length && <p className="v3-note">还没有角色。台词配音需要先给角色选择音色（顶部「角色与音色」）。</p>}
      </Section>
@@ -265,6 +281,7 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
       <div className="vs-shot-foot">
        <button className="v3-btn small primary" disabled={!writable || busy || saving || isActive(state.status)} onClick={() => runShot(shot)}>{state.status === 'failed' ? '重试本镜' : '生成本镜'}</button>
        {versions.length > 0 && <button className="v3-btn small" disabled={!writable || busy || saving || isActive(state.status)} onClick={() => runShot(shot, { regenerate: true })}>再生成一版</button>}
+       {state.asset && <button className="v3-btn small" title="用 ffmpeg 去掉这段视频的音轨，不消耗积分" disabled={!writable || busy || saving || isActive(state.status)} onClick={() => stripShot(shot, state.shown?.id)}>去除音轨</button>}
       </div>
       {state.status === 'failed' && <p className="v3-note" title={state.run?.error?.message || ''}>上次失败：{state.run?.error?.message || '请查看错误后重试'}</p>}
      </Section>
@@ -292,7 +309,6 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
   {durationError && <div className="v3-alert" role="alert">{durationError}<button aria-label="关闭" onClick={() => setDurationError('')}>×</button></div>}
   <div className="vs-stage">
    <div className="vs-body">
-    {error && <div className="v3-alert" role="alert" style={{ borderRadius: 8 }}>{error}<button aria-label="关闭" onClick={() => setError('')}>×</button></div>}
     {batch && <div className="vs-card vs-batch" role="region" aria-label="批量生成进度">
      <h3>批量生成<span className={`vs-batch-state ${batch.state}`}>{batchStateLabels[batch.state]}</span><span className="v3-grow" />
       {batch.state === 'paused' && <button className="v3-btn small primary" disabled={!writable || busy || saving} onClick={resumeBatch}>继续</button>}
@@ -320,7 +336,7 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
     <DraftText multiline className="vs-script" aria-label="视频脚本" maxLength={40000} disabled={!writable} value={draft.script} placeholder="点击「AI 生成脚本」，或直接填写带货短视频脚本；分镜将依据脚本拆分。" onCommit={script => editor.patchStoryboard({ script })} />
     <label className="v3-field" style={{ marginTop: 8 }}><span>补充要求（可选）</span><DraftText value={instructions} maxLength={2000} disabled={!writable} placeholder="例如：15 秒竖屏，突出防尘盖与保温时长" onCommit={setInstructions} /></label>
     {server.scriptRequest?.status === 'pending' && <p className="v3-note">脚本正在生成…</p>}
-    <div className="vs-drawer-actions"><button className="v3-btn small primary" disabled={!writable || busy || saving || !draft.script.trim()} onClick={generateShots}>AI 生成分镜</button>{server.shotsRequest?.status === 'pending' && <span className="v3-note">分镜建议正在生成…</span>}</div>
+    <div className="vs-drawer-actions"><button className="v3-btn small primary" disabled={!writable || busy || saving || !draft.script.trim()} onClick={generateShots}>AI 生成分镜</button><button className="v3-btn small" disabled={!writable || busy || saving || !draft.shots.length || generatingDialogue} onClick={generateDialogue}>{generatingDialogue ? 'AI 正在写台词…' : 'AI 生成台词'}</button>{server.shotsRequest?.status === 'pending' && <span className="v3-note">分镜建议正在生成…</span>}</div>
     {suggestionRequest && <div className="vs-card vs-suggest" role="region" aria-label="AI 分镜建议">
      <h3>AI 分镜建议（{suggestionRequest.suggestion.shots.length} 个）<span className="v3-grow" />
       <button className="v3-btn small" disabled={!writable || busy || saving} onClick={discardSuggestion}>放弃</button>
@@ -341,7 +357,7 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
      </li>)}</ol>
     </div>}
     <details className="v3-adv vs-product"><summary>商品资料摘要</summary>
-     {detail?.project?.productSnapshot ? <><strong>{detail.project.productSnapshot.name}</strong><ul>{Object.entries(detail.project.productSnapshot.facts || {}).slice(0, 12).map(([key, value]) => <li key={key}>{key}：{typeof value === 'object' ? JSON.stringify(value) : String(value)}</li>)}</ul><p className="v3-note">脚本与分镜仅使用已知事实，不猜测缺失信息。</p></> : <p className="v3-note">概念创作（未关联商品）。</p>}
+     {detail?.project?.productSnapshot ? <><strong>{detail.project.productSnapshot.name}</strong><ul>{Object.entries(detail.project.productSnapshot.facts || {}).slice(0, 12).map(([key, value]) => <li key={key}>{key}：{typeof value === 'object' ? JSON.stringify(value) : String(value)}</li>)}</ul></> : <p className="v3-note">概念创作（未关联商品）。</p>}
     </details>
    </Drawer>}
    {drawer === 'film' && <Drawer title="成片" onClose={() => setDrawerChoice(null)}>
@@ -356,7 +372,6 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
       <video src={fileUrl(compile.assetId)} controls playsInline preload="metadata" />
       <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
        <a className="v3-btn small" href={`${fileUrl(compile.assetId)}?download=1`} download>下载成片</a>
-       <span className="v3-note" style={{ alignSelf: 'center' }}>成片保留各镜原声，没有声音的镜头自动补静音；镜头之间不加转场。</span>
       </div>
       {compile.subtitles && <p className="v3-note" role="status">{compile.subtitles.burned ? `字幕已烧录到画面，共 ${compile.subtitles.cueCount} 条。` : compile.subtitles.cueCount ? `未烧录字幕（共 ${compile.subtitles.cueCount} 条，可下载 SRT）。` : '这版成片没有字幕。'}</p>}
      </> : compile.status === 'running' ? <div className="vs-compile-empty">正在服务端拼接分镜（不产生模型费用），完成后自动显示。</div>

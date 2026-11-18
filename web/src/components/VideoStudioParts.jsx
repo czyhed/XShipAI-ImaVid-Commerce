@@ -27,11 +27,19 @@ export function Drawer({ title, onClose, children, className = '' }) {
 
 // 顶部时间线（W1 / W7）：一排缩略图，点击选中，拖动排序，末尾「＋」新增；缩略图上标出自定义与需要处理的原因。
 export function Timeline({ items, selectedId, writable, canAdd, onSelect, onReorder, onAdd, onIssue }) {
- const [drag, setDrag] = useState(null), [over, setOver] = useState(null);
- const track = useRef(null);
- useEffect(() => { track.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' }); }, [selectedId]);
+ const [drag, setDrag] = useState(null), [over, setOver] = useState(null), [collapsed, setCollapsed] = useState(false);
+ const track = useRef(null), selected = items.find(item => item.shot.id === selectedId) || null;
+ useEffect(() => { if (!collapsed) track.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' }); }, [selectedId, collapsed]);
  const finish = () => { setDrag(null); setOver(null); };
- return <ol className="vs-track" ref={track} aria-label="分镜时间线">
+ return <section className={`vs-track-shell${collapsed ? ' is-collapsed' : ''}`} aria-label="分镜时间线">
+  <div className="vs-track-bar">
+   <strong>分镜时间线 <small>{items.length} 镜</small></strong>
+   {collapsed ? <div className="vs-track-summary">
+    {selected ? <><span className="vs-track-current">第 {selected.index + 1} 镜 · {selected.title}</span><span className={`v3-badge ${selected.state.status}`}>{statusLabels[selected.state.status] || '未生成'}</span></> : <span className="vs-track-current">选择一个分镜开始编辑</span>}
+    <button type="button" className="v3-btn small" aria-expanded="false" onClick={() => setCollapsed(false)}>展开时间线</button>
+   </div> : <button type="button" className="v3-btn small vs-track-collapse" aria-expanded="true" onClick={() => setCollapsed(true)}>收起</button>}
+  </div>
+  {!collapsed && <ol className="vs-track" ref={track}>
   {items.map(({ shot, index, title, state, thumb, duration, custom, customKeys, issues }) => <li key={shot.id}
    className={`vs-tile${shot.id === selectedId ? ' on' : ''}${drag === index ? ' dragging' : ''}${over === index && drag !== null && drag !== index ? ' over' : ''}`} data-tile={shot.id} data-status={state.status}
    draggable={writable} onDragStart={event => { setDrag(index); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', shot.id); }}
@@ -48,7 +56,8 @@ export function Timeline({ items, selectedId, writable, canAdd, onSelect, onReor
    </span>}
   </li>)}
   <li className="vs-add"><button type="button" aria-label="＋ 添加分镜" title="添加分镜" disabled={!writable || !canAdd} onClick={onAdd}>＋</button></li>
- </ol>;
+  </ol>}
+ </section>;
 }
 
 // 单镜素材区（W2）：按当前方式显示素材槽位，每个槽位一个「＋选择素材」；卡片可点击插入提示词标签，× 移除。
@@ -133,7 +142,6 @@ export function PreviewPlayer({ playlist, onClose }) {
  const total = playlist.reduce((sum, entry) => sum + entry.duration, 0);
  return <div className="v3-overlay"><div className="v3-dialog vs-player" role="dialog" aria-modal="true" aria-label="整片连播预览">
   <header><h2>整片连播预览</h2><button type="button" aria-label="关闭" onClick={onClose}>×</button></header>
-  <p className="v3-note">按顺序播放各镜当前展示的成功版本，不拼接、不产生费用；未生成的镜头显示占位画面。</p>
   <div className="vs-player-stage">
    {done ? <div className="vs-player-ph" role="status"><strong>播放结束</strong><button type="button" className="v3-btn" onClick={() => jump(0)}>从头再看</button></div>
     : item?.src ? <video key={`${item.shotId}:${item.src}`} ref={video} className="vs-player-video" src={fileUrl(item.src)} controls playsInline aria-label={`第 ${index + 1} 镜：${item.title}`}

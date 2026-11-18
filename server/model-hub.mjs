@@ -140,6 +140,18 @@ export class ModelHub {
     const result = await this.pool.query(`INSERT INTO sj_channel_models(channel_id,model_id,name,enabled,capabilities,manual) VALUES($1,$2,$3,$4,$5,true) ON CONFLICT(channel_id,model_id) DO UPDATE SET enabled=excluded.enabled,capabilities=excluded.capabilities,name=excluded.name RETURNING *`,[channelId,modelId,String(patch.name||existing?.name||modelId).slice(0,300),patch.enabled??existing?.enabled??false,JSON.stringify([...new Set(capabilities)])]);
     return (await this.catalog()).models.find(m=>m.channelId===channelId&&m.modelId===result.rows[0].model_id);
   }
+  // 删除单个模型。正被某个环节作为默认模型使用时不允许删除，避免默认指向不存在的模型。
+  async removeModel(channelId, modelId) {
+    validateModelId(modelId);
+    const catalog = await this.catalog();
+    const model = catalog.models.find(m=>m.channelId===channelId&&m.modelId===modelId);
+    if (!model) throw new AppError('MODEL_NOT_FOUND','模型不存在或已被删除。',404);
+    if (!model.manual) throw new AppError('MODEL_NOT_MANUAL','同步得到的模型不能删除，请取消「启用」即可停用。',422);
+    const stages = Object.entries(catalog.defaults).filter(([,d])=>d.channelId===channelId&&d.modelId===modelId).map(([stage])=>STAGE_LABELS[stage]||stage);
+    if (stages.length) throw new AppError('MODEL_IN_USE',`该模型正作为「${stages.join('、')}」的默认模型，请先到「环节默认」切换成其他模型，再删除。`,422);
+    await this.pool.query('DELETE FROM sj_channel_models WHERE channel_id=$1 AND model_id=$2',[channelId,modelId]);
+    return {channelId,modelId};
+  }
   // 语音环节：默认指向一个火山引擎语音渠道（渠道没有模型目录，model_id 固定为 'voice'）。
   async setVoiceDefault(channelId) {
     const channel=await this.channels.get(channelId);
@@ -217,6 +229,7 @@ export class ModelHub {
 
 const CAPABILITIES=['text','vision','image','video'];
 const STAGES={product:['text'],planning:['text'],image:['image'],video:['video']};
+const STAGE_LABELS={product:'商品聊天',planning:'AI 规划',image:'生图',video:'视频',voice:'语音配音'};
 function validateModelId(value) { if(typeof value!=='string'||!value.trim()||value.length>200||/[\r\n]/.test(value))throw new AppError('INVALID_MODEL_ID','模型 ID 需为 1–200 个字符。',422); }
 function executorCapabilities(channel) {
  const adapter=channel?.adapter||'openai-compatible';
