@@ -106,6 +106,12 @@
 .v3-dot{width:8px;height:8px;border-radius:50%;background:var(--c,var(--v3-accent));flex:none}
 .v3-kind{font-size:12px;font-weight:600}
 .v3-node-head-more{margin-left:auto;display:flex;align-items:center;gap:6px}
+/* 节点收起：标题栏右侧的展开 / 收起按钮与序号徽标（用 .v3-shell 前缀压过全局 button 重置） */
+.v3-shell .v3-node .v3-node-collapse{width:22px;height:22px;padding:0;display:grid;place-items:center;border:0;background:none;border-radius:6px;color:#7b8ca7;font-size:13px;line-height:1;cursor:pointer;flex:none}
+.v3-shell .v3-node .v3-node-collapse:hover{background:var(--v3-surface-2);color:var(--v3-accent)}
+.v3-shell .v3-node .v3-node-index{font-size:10.5px;font-weight:600;font-variant-numeric:tabular-nums;color:var(--v3-accent);background:var(--v3-accent-soft);border-radius:999px;padding:1px 6px;line-height:15px;white-space:nowrap}
+.v3-node.is-collapsed header{padding-right:9px}
+.v3-node.is-collapsed header .v3-dim-tag{opacity:.85}
 .v3-badge{font-size:10px;padding:2px 7px;border-radius:999px;border:1px solid var(--v3-line);color:var(--v3-mute);white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
 .v3-badge.queued,.v3-badge.idle{background:var(--v3-surface-2);color:var(--v3-dim)}
 .v3-badge.running,.v3-badge.submitting{background:var(--v3-run-soft);border-color:transparent;color:var(--v3-run)}
@@ -218,9 +224,31 @@
 .v3-dialog li>div{display:flex;justify-content:space-between;gap:12px;font-size:12.5px}
 .v3-dialog li span{color:var(--v3-accent);font-size:11px;white-space:nowrap}
 .v3-dialog li p{margin:5px 0 0;font-size:11.5px;color:var(--v3-mute);line-height:1.55}
+/* 执行范围预览：无分隔横线，正文放大 */
+.v3-dialog.scope-preview h2{font-size:17px}
+.v3-dialog.scope-preview li{border-bottom:0;padding:6px 0}
+.v3-dialog.scope-preview li>div{font-size:14px;align-items:baseline}
+.v3-dialog.scope-preview li span{font-size:12.5px}
+.v3-dialog.scope-preview li p{font-size:13px;line-height:1.65;margin-top:6px}
+.v3-dialog.scope-preview footer{border-top:0;padding-top:4px;margin-top:10px}
 .v3-check{display:flex!important;align-items:center;gap:7px;font-size:12px;color:var(--v3-dim)}
 .v3-check input{width:14px;height:14px;accent-color:var(--v3-accent)}
 .v3-dialog-lead{font-size:12.5px;color:var(--v3-dim);margin:0 0 12px;line-height:1.6}
+/* AI 安排：套图方案 tabs */
+.poster-set-picker{margin-bottom:14px}
+.poster-set-head{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.poster-set-head strong{font-size:13px;color:var(--v3-fg)}
+.poster-set-head small{font-size:11.5px;color:var(--v3-mute)}
+.poster-set-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.v3-shell .poster-set-tabs button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:9px 11px;border:1px solid var(--v3-line);border-radius:9px;background:var(--v3-surface);cursor:pointer;transition:border-color .12s,background .12s,box-shadow .12s}
+.v3-shell .poster-set-tabs button strong{font-size:13px;color:var(--v3-fg)}
+.v3-shell .poster-set-tabs button small{font-size:11px;color:var(--v3-mute);line-height:1.4}
+.v3-shell .poster-set-tabs button:hover{border-color:var(--v3-accent)}
+.v3-shell .poster-set-tabs button.on{border-color:var(--v3-accent);background:var(--v3-accent-soft);box-shadow:0 0 0 1px var(--v3-accent)}
+.v3-shell .poster-set-tabs button.on strong{color:var(--v3-accent)}
+.proposal-copy{font-size:12px;line-height:1.7;color:var(--v3-dim);margin:6px 0 0}
+@media(max-width:560px){.poster-set-tabs{grid-template-columns:1fr}}
+
 .v3-plan-list{display:flex;flex-direction:column;gap:8px;max-height:46vh;overflow:auto}
 .v3-plan-list article{background:var(--v3-surface-2);border:1px solid var(--v3-line);border-radius:8px;padding:9px 10px}
 .v3-plan-list article strong{font-size:12.5px;margin-right:8px}

@@ -4,6 +4,7 @@ import '@xyflow/react/dist/style.css';
 import { canWrite } from '../lib/auth.js';
 import DraftText from './DraftText.jsx';
 import { autoLayout } from '../lib/canvas-layout.js';
+import { POSTER_SETS, TEMPLATES } from '../lib/templates.js';
 import { withWorkflows, workflowScope, createWorkflow } from '../../../shared/creation-workflows.mjs';
 import CanvasNodeEditor from './CanvasNodeEditor.jsx';
 import MaskEditor from './MaskEditor.jsx';
@@ -69,11 +70,11 @@ function visibleInputs(task, edges, tasks) {
  const used = new Set(edges.filter(e => e.target === task.id).map(e => targetHandleOf(e, tasks)));
  return defs.filter(([id]) => active.has(id) || used.has(id)).map(def => ({ def, unused: !active.has(def[0]) }));
 }
-function HandleRow({ task, dir, writable, edges, tasks }) {
+function HandleRow({ task, dir, writable, edges, tasks, collapsed = false }) {
  const list = dir === 'in' ? visibleInputs(task, edges, tasks) : (NODE[task.kind]?.outs || []).map(def => ({ def, unused: false }));
  return list.map(({ def: [id, type], unused }, index) => (
   <Handle key={id} id={id} type={dir === 'in' ? 'target' : 'source'} position={dir === 'in' ? Position.Left : Position.Right}
-   isConnectable={writable && !unused} className={`v3-port ${type}${unused ? ' unused' : ''}`} style={{ top: 46 + index * 24 }} title={task.kind === 'video' && dir === 'in' ? PORT_LABEL[id] : undefined}>
+   isConnectable={writable && !unused} className={`v3-port ${type}${unused ? ' unused' : ''}`} style={{ top: collapsed ? 23 : 46 + index * 24 }} title={task.kind === 'video' && dir === 'in' ? PORT_LABEL[id] : undefined}>
    <span className="v3-port-label">{task.kind === 'video' || ['audio', 'footage'].includes(task.kind) ? PORT_LABEL[id] || id : id}</span>
   </Handle>
  ));
@@ -81,15 +82,16 @@ function HandleRow({ task, dir, writable, edges, tasks }) {
 
 function V3Node({ data, selected }) {
  const { task, run, writable } = data;
+ const collapsed = Boolean(data.collapsed);
  const update = useUpdateNodeInternals();
  const edges = data.editor.edges, tasks = data.editor.tasks;
  const signature = visibleInputs(task, edges, tasks).map(({ def, unused }) => def[0] + (unused ? '-' : '')).join();
- useEffect(() => { update(task.id); }, [signature, task.id, update]);
- return <div className={`v3-node ${selected ? 'is-selected' : ''} kind-${task.kind}`}>
-  <HandleRow task={task} dir="in" writable={writable && !data.shared} edges={edges} tasks={tasks} />
-  <header><span className="v3-dot" style={{ '--c': NODE[task.kind].color }} /><span className="v3-kind">{NODE[task.kind].label}</span><span className="v3-node-head-more">{task.dimension && <span className="v3-dim-tag">{task.dimension}</span>}<span className={`v3-badge ${run?.status || 'idle'}`}>{statusLabels[run?.status] || (EXECUTABLE.has(task.kind) ? '未开始' : '可编辑')}</span></span></header>
-  <CanvasNodeEditor data={data} />
-  <HandleRow task={task} dir="out" writable={writable && !data.shared} edges={edges} tasks={tasks} />
+ useEffect(() => { update(task.id); }, [signature, task.id, update, collapsed]);
+ return <div className={`v3-node ${selected ? 'is-selected' : ''} kind-${task.kind}${collapsed ? ' is-collapsed' : ''}`}>
+  <HandleRow task={task} dir="in" writable={writable && !data.shared} edges={edges} tasks={tasks} collapsed={collapsed} />
+  <header><span className="v3-dot" style={{ '--c': NODE[task.kind].color }} /><span className="v3-kind">{NODE[task.kind].label}</span><span className="v3-node-head-more">{collapsed && data.index && <span className="v3-node-index" title={`第 ${data.index} 个节点`}>#{data.index}</span>}{task.dimension && <span className="v3-dim-tag">{task.dimension}</span>}<span className={`v3-badge ${run?.status || 'idle'}`}>{statusLabels[run?.status] || (EXECUTABLE.has(task.kind) ? '未开始' : '可编辑')}</span><button type="button" className="v3-node-collapse nodrag nopan" aria-label={collapsed ? '展开节点' : '收起节点'} aria-expanded={!collapsed} title={collapsed ? '展开节点' : '收起节点'} onClick={event => { event.stopPropagation(); data.onToggleCollapse?.(task.id); }}>{collapsed ? '▸' : '▾'}</button></span></header>
+  {!collapsed && <CanvasNodeEditor data={data} />}
+  <HandleRow task={task} dir="out" writable={writable && !data.shared} edges={edges} tasks={tasks} collapsed={collapsed} />
  </div>;
 }
 const nodeTypes = { v3node: V3Node };
@@ -100,9 +102,12 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
  const [nodes, setNodes] = useState([]), [edges, setEdges] = useState([]), [selected, setSelected] = useState([]);
  const [error, setError] = useState(''), [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false);
  const [assetMap, setAssetMap] = useState({}), [checkedIds, setCheckedIds] = useState({}), [models, setModels] = useState([]), [hub, setHub] = useState({ channels: [], defaults: {} });
- const [preview, setPreview] = useState(null), [planning, setPlanning] = useState(false), [instructions, setInstructions] = useState('');
+ const [preview, setPreview] = useState(null), [planning, setPlanning] = useState(false), [instructions, setInstructions] = useState(''), [posterSet, setPosterSet] = useState(null);
  const [allowVideo, setAllowVideo] = useState(false), [showPalette, setShowPalette] = useState(false);
- const [queueFilter, setQueueFilter] = useState('all'), [queueOpen, setQueueOpen] = useState(false);
+ const [queueFilter, setQueueFilter] = useState('all'), [queueOpen, setQueueOpen] = useState(false), [tasksOpen, setTasksOpen] = useState(true);
+ const [fabPos, setFabPos] = useState(null);
+ const [collapsedNodes, setCollapsedNodes] = useState([]);
+ const fabDrag = useRef(null);
  const [workflowId, setWorkflowId] = useState(null), [taskQuery, setTaskQuery] = useState(''), [newWorkflow, setNewWorkflow] = useState(false), [workflowName, setWorkflowName] = useState(''), [workflowKind, setWorkflowKind] = useState('generate');
  const [dismissedProposal, setDismissedProposal] = useState(null), [rolesOpen, setRolesOpen] = useState(false);
  const [refine, setRefine] = useState(null), [tool, setTool] = useState('pan'), [zoomPct, setZoomPct] = useState(100), [displayRun, setDisplayRunMap] = useState({});
@@ -261,7 +266,25 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   window.addEventListener('beforeunload', warn);
   return () => window.removeEventListener('beforeunload', warn);
  }, []);
- useEffect(() => { if (runs.length) setQueueOpen(true); }, [runs.length]);
+ // 运行记录悬浮球的位置按项目保存在本机（只影响视口装饰，不进服务器）。
+ useEffect(() => {
+  try {
+   const saved = JSON.parse(localStorage.getItem(`sj:queue-fab:${projectId}`) || 'null');
+   setFabPos(saved && Number.isFinite(saved.left) && Number.isFinite(saved.top) ? { left: saved.left, top: saved.top } : null);
+  } catch { setFabPos(null); }
+ }, [projectId]);
+ // 节点收起状态按项目保存在本机：收起后只留标题栏，便于在画布上俯瞰整条流程。
+ useEffect(() => {
+  try {
+   const saved = JSON.parse(localStorage.getItem(`sj:node-collapse:${projectId}`) || '[]');
+   setCollapsedNodes(Array.isArray(saved) ? saved.filter(id => typeof id === 'string') : []);
+  } catch { setCollapsedNodes([]); }
+ }, [projectId]);
+ const toggleNodeCollapsed = useCallback(id => setCollapsedNodes(old => {
+  const next = old.includes(id) ? old.filter(item => item !== id) : [...old, id];
+  try { localStorage.setItem(`sj:node-collapse:${projectId}`, JSON.stringify(next)); } catch {}
+  return next;
+ }), [projectId]);
 
  const lastRun = useCallback(id => runs.filter(r => r.taskId === id).at(-1), [runs]);
  const successRuns = useCallback(id => runs.filter(r => r.taskId === id && r.status === 'succeeded' && r.output?.assetId), [runs]);
@@ -279,7 +302,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
  }, [loaded, view]);
  useEffect(() => {
   if (!draft || gestureRef.current || pointerDownRef.current) return;
-  const buildNodes = () => draft.tasks.filter(task => scope.visible.has(task.id)).map(task => {
+  const buildNodes = () => draft.tasks.filter(task => scope.visible.has(task.id)).map((task, index) => {
    const versions = successRuns(task.id);
    const shown = displayRun[task.id] ? versions.find(r => r.id === displayRun[task.id]) : versions.at(-1);
    const asset = shown?.output?.assetId || task.sourceAssetId || null;
@@ -288,8 +311,8 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
    const promptSource = promptEdge ? draft.tasks.find(t => t.id === promptEdge.source) : null;
    const displayPrompt = task.prompt || (promptSource?.kind === 'product' ? '使用商品资料' : promptSource?.prompt) || '';
    return {
-    id: task.id, type: 'v3node', position: task.position, draggable: scope.owned.has(task.id),
-    data: { shared: !scope.owned.has(task.id), editor: buildEditor(), task, run: lastRun(task.id), writable, asset, displayPrompt, hasPromptSource: Boolean(promptSource), versions, displayRun: displayRun[task.id] || null, onDisplayRun: setDisplayRun, upstream: incoming, layout: task.params?.size || '1024×1024' },
+    id: task.id, type: 'v3node', position: task.position, draggable: true,
+    data: { shared: !scope.owned.has(task.id), editor: buildEditor(), task, run: lastRun(task.id), writable, asset, displayPrompt, hasPromptSource: Boolean(promptSource), versions, displayRun: displayRun[task.id] || null, onDisplayRun: setDisplayRun, upstream: incoming, layout: task.params?.size || '1024×1024', index: index + 1, collapsed: collapsedNodes.includes(task.id), onToggleCollapse: toggleNodeCollapsed },
    };
   });
   const nextEdges = draft.edges.filter(e => scope.visible.has(e.source) && scope.visible.has(e.target)).map(e => ({ ...e, type: 'smoothstep', animated: runs.some(r => r.taskId === e.target && isActive(r.status)) }));
@@ -305,7 +328,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
    return nextNodes.map(node => ({ ...existing.get(node.id), ...node }));
   });
   setEdges(nextEdges);
- }, [draft, runs, writable, lastRun, successRuns, displayRun, setDisplayRun, layoutTick, scope, assets, models, hub, busy]);
+ }, [draft, runs, writable, lastRun, successRuns, displayRun, setDisplayRun, layoutTick, scope, assets, models, hub, busy, collapsedNodes, toggleNodeCollapsed]);
 
  // 打开项目或切换任务时，按当前任务的节点适应视图，避免沿用其它任务的视角把节点裁掉。
  const fittedFor = useRef(null), programmaticMove = useRef(false);
@@ -362,6 +385,32 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   saveView(projectId, viewKeyRef.current, viewport);
  }, [projectId]);
  const onInitCallback = useCallback(instance => { flow.current = instance; }, []);
+ // 悬浮球拖动：位置相对画布的定位父元素换算，松手后写入 localStorage；单击（未拖动）才展开记录。
+ const fabMoved = useRef(false);
+ const onFabPointerDown = event => {
+  if (event.button !== 0) return;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const host = (event.currentTarget.offsetParent || canvasBox.current)?.getBoundingClientRect() || rect;
+  fabMoved.current = false;
+  fabDrag.current = { dx: event.clientX - rect.left, dy: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, host, left: rect.left - host.left, top: rect.top - host.top };
+  try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch {}
+ };
+ const onFabPointerMove = event => {
+  const drag = fabDrag.current; if (!drag) return;
+  if (Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY) < 4) return;
+  fabMoved.current = true;
+  const size = 46, maxX = Math.max(0, drag.host.width - size), maxY = Math.max(0, drag.host.height - size);
+  const left = Math.min(Math.max(0, event.clientX - drag.host.left - drag.dx), maxX);
+  const top = Math.min(Math.max(0, event.clientY - drag.host.top - drag.dy), maxY);
+  drag.left = left; drag.top = top;
+  setFabPos({ left: Math.round(left), top: Math.round(top) });
+ };
+ const onFabPointerUp = event => {
+  const drag = fabDrag.current; fabDrag.current = null;
+  if (!drag) return;
+  try { event.currentTarget.releasePointerCapture?.(event.pointerId); } catch {}
+  if (fabMoved.current) { try { localStorage.setItem(`sj:queue-fab:${projectId}`, JSON.stringify({ left: Math.round(drag.left), top: Math.round(drag.top) })); } catch {} }
+ };
  const nodesChange = useCallback(changes => setNodes(old => applyNodeChanges(changes, old)), []);
  const edgesChange = useCallback(changes => {
   setEdges(old => applyEdgeChanges(changes, old));
@@ -503,6 +552,8 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   selectNodes([nextId]);
  }
  async function startPreview(data) {
+  // 真正开始运行才展开运行记录；用户收起后轮询刷新不会把它顶开。
+  setQueueOpen(true);
   const composite = data.scope.filter(s => s.action === 'composite').map(s => s.taskId);
   const regular = data.scope.filter(s => ['generate', 'reuse', 'recover'].includes(s.action)).map(s => s.taskId);
   if (regular.length) {
@@ -583,7 +634,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   notify?.('正在生成安排，完成后会显示待确认方案');
   await work(async () => {
    await flush();
-   const data = await creationRequest(backend, base + '/suggest', { instructions, allowVideo, requestKey: uid() });
+   const data = await creationRequest(backend, base + '/suggest', { instructions, allowVideo, posterSet, requestKey: uid() });
    accept(data); setPlanning(false);
    if (data.suggestion?.status === 'failed') fail(data.suggestion.error);
   });
@@ -666,6 +717,9 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
  const failedCount = workflowRuns.filter(r => r.status === 'failed').length;
  const visibleRuns = workflowRuns.filter(r => queueFilter === 'all' || (queueFilter === 'active' ? isActive(r.status) : r.status === queueFilter)).toReversed();
  const saveLabel = { saved: '已保存', dirty: '未保存', saving: '保存中…', failed: '保存失败' }[saveState.state];
+ // 悬浮球拖到边缘时让气泡朝画布内侧展开，避免被视口裁掉。
+ const fabWidth = canvasBox.current?.clientWidth || 0;
+ const fabTip = !fabPos ? '' : fabPos.left < 170 ? ' tip-left' : fabWidth && fabPos.left > fabWidth - 210 ? ' tip-right' : '';
 
  // 编辑器失焦（输入框 / 文本域 / 下拉框）时立即发送；延后一拍，让 DraftText 先完成提交。
  const flushOnBlur = event => { if (['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName)) setTimeout(() => queueRef.current?.flush().catch(() => {}), 0); };
@@ -679,7 +733,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
     <button className="v3-btn vr-toolbar-btn" onClick={() => setRolesOpen(true)}>角色与音色</button>
     <button className="v3-btn" disabled={!succeedCount || busy} onClick={downloadZip}>打包当前任务</button>
     {draft.productId && <button className="v3-btn" disabled={!writable || busy} onClick={() => { if (window.confirm('将最新商品资料同步到本项目未开始的节点？已有生成记录保持不变。')) work(async () => { await flush(); accept(await creationRequest(backend, base + '/sync-product', {})); notify?.('商品资料已同步'); }); }}>同步商品资料</button>}
-    <button className="v3-btn" disabled={!writable || busy} onClick={() => setPlanning(true)}>AI 安排</button>
+    <button className="v3-btn" disabled={!writable || busy} onClick={() => { setPosterSet(null); setPlanning(true); }}>AI 安排</button>
     <button className="v3-btn primary" disabled={!writable || busy} onClick={runAll}>预览并运行当前任务</button>
    </div>
   </header>
@@ -691,7 +745,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
   {rolesOpen && <VoiceRolesPanel roles={draft.voiceRoles || []} configured={voiceConfigured} writable={writable} owner={owner} onAssets={rememberAssets} request={(path, body) => creationRequest(backend, path, body)} onSave={saveRoles} onClose={() => setRolesOpen(false)} />}
   {view === 'video' ? <CreationVideoStudio backend={backend} notify={notify} projectId={projectId} detail={detail} draft={draft} editor={buildEditor()} flush={flush} accept={accept} busy={busy} writable={writable} creationRequest={creationRequest} fileUrl={fileUrl} openPreview={data => setPreview(data)} />
    : <>
-  <div className="task-workspace">
+  <div className={`task-workspace${tasksOpen ? '' : ' tasks-collapsed'}`}>
    <aside className="creative-task-list" aria-label="创作任务">
     <header><div><h2>创作任务 <small>{draft.workflows.length}</small></h2></div><button className="v3-btn primary" disabled={!writable || busy} onClick={() => setNewWorkflow(true)}>＋ 新增任务</button></header>
     <input type="search" aria-label="搜索任务" placeholder="搜索任务" value={taskQuery} onChange={e => setTaskQuery(e.target.value)} />
@@ -703,6 +757,7 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
     })}</div>
     <footer><span>所有修改自动保存</span></footer>
    </aside>
+   <button className="tasks-toggle" aria-label={tasksOpen ? '收起任务列表' : '展开任务列表'} aria-expanded={tasksOpen} title={tasksOpen ? '收起任务列表' : '展开任务列表'} onClick={() => setTasksOpen(v => !v)}>{tasksOpen ? '‹' : '›'}</button>
    <div className="task-workspace-main">
   <div className="v3-main">
    <div className="v3-canvas-area">
@@ -742,12 +797,13 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
       <button onClick={toggleFullscreen} aria-label="全屏">⛶</button>
      </div>
      <div className="v3-hint">拖动端口连线 · Delete 删除选中 · Ctrl+Z 撤销</div>
+     {!queueOpen && <button className={`queue-fab${activeCount ? ' active' : ''}${fabTip}`} style={fabPos ? { left: fabPos.left, top: fabPos.top, right: 'auto', bottom: 'auto' } : undefined} aria-label={`展开任务运行记录，共 ${workflowRuns.length} 条`} data-tip={`当前任务运行记录 ${workflowRuns.length} 条 · 成功 ${succeedCount} · 失败 ${failedCount}${activeCount ? ` · 运行中 ${activeCount}` : ''}`} onPointerDown={onFabPointerDown} onPointerMove={onFabPointerMove} onPointerUp={onFabPointerUp} onPointerCancel={() => { fabDrag.current = null; fabMoved.current = false; }} onClick={() => { if (fabMoved.current) { fabMoved.current = false; return; } setQueueOpen(true); }}><span>{workflowRuns.length}</span>{activeCount > 0 && <i aria-hidden="true" />}</button>}
     </div>
    </div>
   </div>
-  <section className="v3-queue" aria-label="任务队列">
-   <header><button className="queue-toggle" aria-expanded={queueOpen} onClick={() => setQueueOpen(!queueOpen)}><h3>当前任务运行记录</h3><span>{queueOpen ? "⌄" : "⌃"}</span></button><div className="v3-tabs">{[['all', `全部 ${workflowRuns.length}`], ['active', `运行中 ${activeCount}`], ['succeeded', `成功 ${succeedCount}`], ['failed', `失败 ${failedCount}`]].map(([key, label]) => <button key={key} className={queueFilter === key ? 'on' : ''} onClick={() => setQueueFilter(key)}>{label}</button>)}</div><div className="v3-grow" /><button className="v3-btn small" onClick={retryAllFailed} disabled={!writable || busy || !failedCount}>↻ 重试失败</button></header>
-   {queueOpen && <div className="v3-queue-scroll">
+  {queueOpen && <section className="v3-queue" aria-label="任务队列">
+   <header><button className="queue-toggle" aria-expanded="true" onClick={() => setQueueOpen(false)} aria-label="当前任务运行记录"><h3>当前任务运行记录</h3></button><div className="v3-tabs">{[['all', `全部 ${workflowRuns.length}`], ['active', `运行中 ${activeCount}`], ['succeeded', `成功 ${succeedCount}`], ['failed', `失败 ${failedCount}`]].map(([key, label]) => <button key={key} className={queueFilter === key ? 'on' : ''} onClick={() => setQueueFilter(key)}>{label}</button>)}</div><div className="v3-grow" /><button className="v3-btn small" onClick={retryAllFailed} disabled={!writable || busy || !failedCount}>↻ 重试失败</button><button className="v3-btn small queue-collapse-btn" onClick={() => setQueueOpen(false)} aria-label="收起任务运行记录">收起<span aria-hidden="true">⌄</span></button></header>
+   <div className="v3-queue-scroll">
     <table><thead><tr><th>#</th><th /><th>任务名称</th><th>类型</th><th>状态</th><th>模型</th><th>耗时</th><th>费用</th><th>错误</th><th /></tr></thead>
      <tbody>{visibleRuns.map((r, index) => { const item = draft.tasks.find(t => t.id === r.taskId); const seconds = Math.max(1, Math.round((new Date(r.updatedAt) - new Date(r.createdAt)) / 1000)); const thumb = r.output?.assetId || item?.sourceAssetId || null; const isVideo = r.input?.kind === 'video' || item?.kind === 'video'; return <tr key={r.id} data-run={r.id} onClick={() => item && selectNodes([item.id])}>
       <td className="num">{index + 1}</td>
@@ -767,14 +823,14 @@ export default function CreationProjectCanvas({ backend, notify, projectId, view
      </tr>; })}
       {!visibleRuns.length && <tr><td colSpan="10" className="v3-empty">还没有运行记录。选择节点后点「运行选中」，或点「预览并运行」。</td></tr>}
      </tbody></table>
-   </div>}
-  </section>
+   </div>
+  </section>}
    </div></div>
    </>}
   {newWorkflow && <div className="v3-overlay"><form className="v3-dialog" role="dialog" aria-modal="true" aria-label="新增创作任务" onSubmit={addWorkflow}><header><h2>新增创作任务</h2><button type="button" aria-label="关闭" onClick={() => setNewWorkflow(false)}>×</button></header><label className="v3-field"><span>任务名称</span><input autoFocus required maxLength={100} value={workflowName} onChange={e => setWorkflowName(e.target.value)} placeholder="例如：秋日场景主图" /></label><label className="v3-field"><span>任务类型</span><select value={workflowKind} onChange={e => setWorkflowKind(e.target.value)}><option value="generate">图片生成</option><option value="edit">图片修改</option><option value="video">视频生成</option><option value="composite">图片合成</option></select></label><footer><button type="button" className="v3-btn" onClick={() => setNewWorkflow(false)}>取消</button><button className="v3-btn primary">创建任务</button></footer></form></div>}
   {refine && (() => { const task = draft.tasks.find(t => t.id === refine.taskId); const baseId = refine.mode === 'redraw' ? (runs.find(r => r.id === task?.sourceRunId)?.output?.assetId || task?.sourceAssetId) : runs.find(r => r.id === refine.runId)?.output?.assetId; return baseId ? <MaskEditor assetId={baseId} title={refine.mode === 'redraw' ? '重新绘制蒙版' : '局部精修'} confirmLabel={refine.mode === 'redraw' ? '保存蒙版' : '确认并预览'} initialInstruction={refine.mode === 'redraw' ? task?.prompt || '' : ''} onCancel={() => setRefine(null)} onConfirm={submitRefine} /> : null; })()}
-  {preview && <div className="v3-overlay"><div className="v3-dialog" role="dialog" aria-modal="true" aria-label="执行范围预览"><header><h2>执行范围</h2><button aria-label="关闭" onClick={() => setPreview(null)}>×</button></header><ol>{preview.scope.map(entry => <li key={entry.taskId}><div><strong>{entry.title}</strong><span>{entry.action === 'blocked' ? '需要处理' : entry.action === 'reuse' ? '复用成功版本' : entry.action === 'recover' ? '继续查询原任务' : entry.action === 'retry-confirm' ? '待确认重试' : entry.action === 'composite' ? '本地合成' : '新生成'}</span></div>{entry.reason && <p>{entry.reason}</p>}{entry.estimatedPoints > 0 && <p className="pv-points">预估 {pointText(entry.estimatedPoints)}</p>}{entry.dialogueWarning && <p className="pv-warn">{entry.dialogueWarning}</p>}</li>)}</ol>{preview.estimatedPoints > 0 && <div className="pv-summary" aria-label="积分预估"><div><span>预估合计</span><strong>{pointText(preview.estimatedPoints)}</strong></div><div><span>可用积分</span><strong>{preview.balance ? pointText(preview.balance.available) : '余额未知'}</strong></div>{preview.balanceReason && <p className="pv-short" role="alert">{preview.balanceReason}</p>}</div>}<footer><button className="v3-btn" onClick={() => setPreview(null)}>取消</button><button className="v3-btn primary" disabled={!preview.canStart || busy || !writable} onClick={() => { const data = preview; setPreview(null); work(() => startPreview(data)); }}>开始</button></footer></div></div>}
-  {planning && <div className="v3-overlay"><div className="v3-dialog" role="dialog" aria-modal="true" aria-label="AI 安排"><header><h2>AI 安排</h2><button aria-label="关闭" onClick={() => setPlanning(false)}>×</button></header><label className="v3-field"><span>创作要求</span><textarea autoFocus rows={6} maxLength={8000} value={instructions} onChange={e => setInstructions(e.target.value)} placeholder="例如：再补两张衣柜场景图，突出防尘盖" /></label><label className="v3-check"><input type="checkbox" checked={allowVideo} onChange={e => setAllowVideo(e.target.checked)} />包含视频任务</label><footer><button className="v3-btn" onClick={() => setPlanning(false)}>取消</button><button className="v3-btn primary" disabled={!instructions.trim() || busy || !writable} onClick={suggest}>{busy ? '正在安排…' : '生成安排'}</button></footer></div></div>}
-  {proposal && proposal.status === 'ready' && <div className="v3-overlay"><div className="v3-dialog" role="dialog" aria-modal="true" aria-label="待确认的 AI 安排"><header><h2>待确认的 AI 安排</h2><button aria-label="关闭" onClick={() => setDismissedProposal(proposal.id)}>×</button></header><p className="v3-dialog-lead">新增 {proposal.plan.additions.length} 个节点，修改 {proposal.plan.updates.length} 个节点。确认后才会写入画布，不会自动生成。</p><div className="v3-plan-list">{proposal.plan.additions.map((t, i) => <article key={i}><strong>{t.title}</strong><span>{t.kind === 'video' ? '视频' : t.kind === 'edit' ? '改图' : '生图'}</span><p>{t.prompt}</p></article>)}{proposal.plan.updates.map(t => <article key={t.id}><strong>{draft.tasks.find(x => x.id === t.id)?.title || t.id}</strong><span>修改</span><p>{JSON.stringify(t.changes)}</p></article>)}</div><footer><button className="v3-btn" onClick={() => setDismissedProposal(proposal.id)}>取消</button><button className="v3-btn primary" disabled={!writable || busy} onClick={() => applyProposal(proposal)}>确认应用</button></footer></div></div>}
+  {preview && <div className="v3-overlay"><div className="v3-dialog scope-preview" role="dialog" aria-modal="true" aria-label="执行范围预览"><header><h2>执行范围</h2><button aria-label="关闭" onClick={() => setPreview(null)}>×</button></header><ol>{preview.scope.map(entry => <li key={entry.taskId}><div><strong>{entry.title}</strong><span>{entry.action === 'blocked' ? '需要处理' : entry.action === 'reuse' ? '复用成功版本' : entry.action === 'recover' ? '继续查询原任务' : entry.action === 'retry-confirm' ? '待确认重试' : entry.action === 'composite' ? '本地合成' : '新生成'}</span></div>{entry.reason && <p>{entry.reason}</p>}{entry.estimatedPoints > 0 && <p className="pv-points">预估 {pointText(entry.estimatedPoints)}</p>}{entry.dialogueWarning && <p className="pv-warn">{entry.dialogueWarning}</p>}</li>)}</ol>{preview.estimatedPoints > 0 && <div className="pv-summary" aria-label="积分预估"><div><span>预估合计</span><strong>{pointText(preview.estimatedPoints)}</strong></div><div><span>可用积分</span><strong>{preview.balance ? pointText(preview.balance.available) : '余额未知'}</strong></div>{preview.balanceReason && <p className="pv-short" role="alert">{preview.balanceReason}</p>}</div>}<footer><button className="v3-btn" onClick={() => setPreview(null)}>取消</button><button className="v3-btn primary" disabled={!preview.canStart || busy || !writable} onClick={() => { const data = preview; setPreview(null); work(() => startPreview(data)); }}>开始</button></footer></div></div>}
+  {planning && <div className="v3-overlay"><div className="v3-dialog" role="dialog" aria-modal="true" aria-label="AI 安排"><header><h2>AI 安排</h2><button aria-label="关闭" onClick={() => setPlanning(false)}>×</button></header><div className="poster-set-picker"><div className="poster-set-head"><strong>套图方案</strong><small>选中后自动填入创作要求，可继续修改</small></div><div className="poster-set-tabs" role="tablist" aria-label="套图方案">{POSTER_SETS.map(item => <button key={item.id} type="button" role="tab" aria-selected={posterSet === item.id} className={posterSet === item.id ? 'on' : ''} onClick={() => { setPosterSet(item.id); setInstructions(item.brief); }}><strong>{item.name}</strong><small>{item.tagline}</small></button>)}<button type="button" role="tab" aria-selected={!posterSet} className={posterSet ? '' : 'on'} onClick={() => setPosterSet(null)}><strong>自由安排</strong><small>不套用模板</small></button></div></div><label className="v3-field"><span>创作要求</span><textarea autoFocus rows={6} maxLength={8000} value={instructions} onChange={e => setInstructions(e.target.value)} placeholder="例如：再补两张衣柜场景图，突出防尘盖" /></label><label className="v3-check"><input type="checkbox" checked={allowVideo} onChange={e => setAllowVideo(e.target.checked)} />包含视频任务</label><footer><button className="v3-btn" onClick={() => setPlanning(false)}>取消</button><button className="v3-btn primary" disabled={!instructions.trim() || busy || !writable} onClick={suggest}>{busy ? '正在安排…' : '生成安排'}</button></footer></div></div>}
+  {proposal && proposal.status === 'ready' && <div className="v3-overlay"><div className="v3-dialog" role="dialog" aria-modal="true" aria-label="待确认的 AI 安排"><header><h2>待确认的 AI 安排</h2><button aria-label="关闭" onClick={() => setDismissedProposal(proposal.id)}>×</button></header><p className="v3-dialog-lead">新增 {proposal.plan.additions.length} 个节点，修改 {proposal.plan.updates.length} 个节点。确认后才会写入画布，不会自动生成。</p><div className="v3-plan-list">{proposal.plan.additions.map((t, i) => { const template = t.templateId ? TEMPLATES.find(item => item.id === t.templateId) : null; const copy = t.copy && typeof t.copy === 'object' ? Object.entries(t.copy) : []; return <article key={i}><strong>{t.title}</strong><span>{template ? template.name : t.kind === 'video' ? '视频' : t.kind === 'edit' ? '改图' : '生图'}</span>{template ? (copy.length ? <p className="proposal-copy">{copy.map(([key, value]) => `${key}：${value}`).join('　')}</p> : <p className="proposal-copy">纯白底首图，不放任何文字</p>) : <p>{t.prompt}</p>}</article>; })}{proposal.plan.updates.map(t => <article key={t.id}><strong>{draft.tasks.find(x => x.id === t.id)?.title || t.id}</strong><span>修改</span><p>{JSON.stringify(t.changes)}</p></article>)}</div><footer><button className="v3-btn" onClick={() => setDismissedProposal(proposal.id)}>取消</button><button className="v3-btn primary" disabled={!writable || busy} onClick={() => applyProposal(proposal)}>确认应用</button></footer></div></div>}
  </section>;
 }

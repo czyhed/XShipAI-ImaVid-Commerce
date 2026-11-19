@@ -223,3 +223,4 @@ label>input:disabled{opacity:1}
 @media (max-width:480px){.pager{gap:8px}.pager .btn{flex:1 1 40%}.pager-status{order:-1;flex:1 0 100%}}
 .picker-feed{display:flex;flex-direction:column;gap:8px;min-width:0}
 .picker-search{width:100%;min-width:0}
+.picker-applied{margin:0;font-size:11.5px;line-height:1.6;color:var(--v3-dim,#586b89)}

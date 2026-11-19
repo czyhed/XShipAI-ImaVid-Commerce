@@ -13,7 +13,36 @@ import { validateVoiceRoles, MAX_VOICE_ROLES } from '../shared/creation-voice.mj
 import { checkVideoSettings, normalizeVideoSettings, effectiveVideoParams, SETTING_DEFAULTS } from '../shared/creation-video-settings.mjs';
 import { SHOT_PLANNING_SYSTEM, MAX_PLAN_MATERIALS, materialsForModel, sanitizeShotPlan, previewShot } from './video-shot-plan.mjs';
 import { PRESENTER_STYLES, PRESENTER_STYLE_LABEL, PRESENTER_SOURCES, PRESENTER_DEFAULT_ROLE, PRESENTER_DEFAULT_SPEAKER, PRESENTER_DIALOGUE_SYSTEM, checkPresenterInput, buildPresenterPrompt, presenterImagePrompt, sanitizePresenterLine, presenterHoldPrompt, HOLD_PROMPT_KEYS, PRESENTER_DEFAULT_DURATION, PRESENTER_MIN_DURATION, PRESENTER_MAX_DURATION, PRESENTER_MAX_PRODUCT_IMAGES } from '../shared/creation-presenter.mjs';
+import { TEMPLATES, POSTER_SETS, renderTemplate } from '../web/src/lib/templates.js';
 const fail=(code,message,status=400)=>{throw new AppError(code,message,status);};
+// 套图模板：AI 安排只填占位符，版式固定，避免模型自由发挥导致排版与字形崩坏。
+const POSTER_TEMPLATE_BY_ID=new Map(TEMPLATES.map(template=>[template.id,template]));
+const posterSetById=id=>POSTER_SETS.find(set=>set.id===id)||null;
+function posterSetRules(set){
+ const lines=set.slots.map((slot,index)=>{
+  const template=POSTER_TEMPLATE_BY_ID.get(slot.templateId);
+  const keys=template?template.placeholders.map(item=>`${item.name}${item.required?'（必填）':item.fallback?`（可省略，默认 ${item.fallback}）`:'（可省略）'}`).join('、')||'无，该模板不允许出现任何文字':'无';
+  return `${index+1}. templateId="${slot.templateId}"，title="${set.name} · ${slot.title}"，dimension="${slot.dimension}"，画面要求：${slot.hint}；copy 可填键：${keys}`;
+ });
+ return `本次要求输出一套「${set.name}」商品套图：必须恰好 ${set.slots.length} 个 kind="generate" 节点，顺序与模板固定如下，不得增减、改换或合并：\n${lines.join('\n')}\n这些节点一律 subject="product"，不要填写 prompt 和 params，改为在 copy 对象里填模板占位符的值；copy 只能使用商品资料里已确认的信息，缺失的键直接省略，每个值不超过 20 个字，不得编造价格、功效、认证、销量或对比结论。除这 ${set.slots.length} 个节点外不要新增其它生图或视频节点，也不要修改已有任务。`;
+}
+function renderPosterAddition(addition){
+ if(!addition?.templateId) return addition;
+ const template=POSTER_TEMPLATE_BY_ID.get(addition.templateId);
+ if(!template) fail('TASK_INVALID','AI 安排使用了不存在的模板，请重新安排。');
+ const copy={};
+ const source=addition.copy&&typeof addition.copy==='object'&&!Array.isArray(addition.copy)?addition.copy:{};
+ for(const [key,value] of Object.entries(source)){
+  if(typeof value!=='string'&&typeof value!=='number') continue;
+  const text=String(value).trim().slice(0,60);
+  if(text) copy[String(key).slice(0,40)]=text;
+ }
+ const prompt=renderTemplate(template,copy);
+ const size=template.compat.size.replace(/\s/g,'').replace('×','x');
+ const params={...(addition.params||{}), ...(/^\d+x\d+$/.test(size)?{size}:{})};
+ const title=(typeof addition.title==='string'&&addition.title.trim()?addition.title.trim():template.name).slice(0,100);
+ return {...addition, title, prompt, params, templateSnapshot:{id:template.id,name:template.name,prompt,params:clone(params)}};
+}
 // 配音合成标记：写入节点，页面重进后也能看到「正在合成」；超过 15 分钟视为残留（服务重启 / 中断）。
 const DUB_PENDING_MS=15*60*1000;
 const isDubPending=task=>{const at=Date.parse(task?.dubPendingAt||'');return Number.isFinite(at)&&Date.now()-at<DUB_PENDING_MS;};
@@ -664,12 +693,14 @@ export class CreationProjects {
  async suggest(workspace,id,body={}) {
   if(typeof body.instructions!=='string'||!body.instructions.trim()||body.instructions.length>8000)fail('PLANNING_INPUT','请填写不超过8000字的创作要求。');
   if(!uuid.test(body.requestKey||''))fail('REQUEST_KEY_REQUIRED','AI安排需要唯一请求编号。');
+  const posterSet=body.posterSet?posterSetById(body.posterSet):null;
+  if(body.posterSet&&!posterSet)fail('POSTER_SET_INVALID','未知的套图方案，请重新选择。');
   let suggestion,invoke=false,context;
   await this.store.change(workspace,id,null,async(project,client)=>{
    this.assertProject(project);
    const existing=(project.suggestions||[]).find(s=>s.requestKey===body.requestKey);
-   if(existing){if(existing.instructions!==body.instructions)fail('REQUEST_KEY_CONFLICT','请求编号已用于不同的创作要求。',409);suggestion=existing;return null;}
-   suggestion={id:randomUUID(),requestKey:body.requestKey,instructions:body.instructions,allowVideo:body.allowVideo===true,status:'pending',baseRevision:project.revision,baseGraphHash:hash({tasks:project.tasks,edges:project.edges}),createdAt:new Date().toISOString()};
+   if(existing){if(existing.instructions!==body.instructions||(existing.posterSet||null)!==(posterSet?.id||null))fail('REQUEST_KEY_CONFLICT','请求编号已用于不同的创作要求。',409);suggestion=existing;return null;}
+   suggestion={id:randomUUID(),requestKey:body.requestKey,instructions:body.instructions,posterSet:posterSet?.id||null,allowVideo:body.allowVideo===true,status:'pending',baseRevision:project.revision,baseGraphHash:hash({tasks:project.tasks,edges:project.edges}),createdAt:new Date().toISOString()};
    const creativeAssets=(await this.store.list(workspace,'asset',false,client))
     .filter(a=>a.role==='creative'&&a.mime?.startsWith('image/')&&!a.deletionPending)
     .map(a=>({id:a.id,name:a.name,mime:a.mime,productId:a.productId||null,width:a.width||null,height:a.height||null}));
@@ -679,7 +710,7 @@ export class CreationProjects {
   if(invoke) {
    let response,plan,status='ready';
    try {
-    response=await this.hub.complete({workspaceId:workspace,stage:'planning',messages:[{role:'user',content:JSON.stringify({instructions:body.instructions,product:context.productSnapshot,tasks:context.tasks,edges:context.edges,creativeAssets:context.creativeAssets})}],system:VIDEO_PLANNING_PARAMETERS+`你是电商创作规划助手。商品事实不得猜测，输出纯JSON {additions:[{id?,kind,title,prompt,params,subject,sourceAssetId?,dimension?}],updates:[{id,changes:{title?,prompt?,params?,sourceAssetId?,dimension?}}],edges?:[{id,source,target,sourceHandle,targetHandle}]}。kind 只能是 generate、edit、video；dimension 是可选维度标签（如 商品白底图、多卖点组合图、多卖点实拍说明、详情参数图、使用场景图、视频分镜），不超过24字，用于画布自动布局。不执行任务。${body.allowVideo===true?'允许图片与视频。':'只允许图片，不安排视频。'}只建议修改未开始任务。creativeAssets 是当前可选创作图片元数据，可按 id 选择 sourceAssetId，并核对 productId 与商品关系；不需要图片 URL。资料图片不是创作素材，禁止将识别资料作为生成来源。`});
+    response=await this.hub.complete({workspaceId:workspace,stage:'planning',messages:[{role:'user',content:JSON.stringify({instructions:body.instructions,product:context.productSnapshot,tasks:context.tasks,edges:context.edges,creativeAssets:context.creativeAssets})}],system:VIDEO_PLANNING_PARAMETERS+(posterSet?posterSetRules(posterSet)+'\n':'')+`你是电商创作规划助手。商品事实不得猜测，输出纯JSON {additions:[{id?,kind,title,prompt,params,subject,sourceAssetId?,dimension?}],updates:[{id,changes:{title?,prompt?,params?,sourceAssetId?,dimension?}}],edges?:[{id,source,target,sourceHandle,targetHandle}]}。kind 只能是 generate、edit、video；dimension 是可选维度标签（如 商品白底图、多卖点组合图、多卖点实拍说明、详情参数图、使用场景图、视频分镜），不超过24字，用于画布自动布局。不执行任务。${body.allowVideo===true?'允许图片与视频。':'只允许图片，不安排视频。'}只建议修改未开始任务。creativeAssets 是当前可选创作图片元数据，可按 id 选择 sourceAssetId，并核对 productId 与商品关系；不需要图片 URL。资料图片不是创作素材，禁止将识别资料作为生成来源。`});
     const text=String(response.text||'').trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'');
     plan=JSON.parse(text);
     if(!Array.isArray(plan.additions)||!Array.isArray(plan.updates))throw new Error('invalid plan');
@@ -706,10 +737,12 @@ export class CreationProjects {
     for(const key of ['title','prompt','params','sourceAssetId','dimension'])if(update.changes?.[key]!==undefined)task[key]=clone(update.changes[key]);
     if(task.kind==='video'&&update.changes?.params!==undefined)task.params=normalizeVideoParameters(task.params);
    }
-   for(const addition of suggestion.plan.additions) {
-    if(addition.kind==='video'&&!suggestion.allowVideo)fail('VIDEO_NOT_REQUESTED','未明确要求视频，不能新增视频任务。');
-    if(addition.params!==undefined&&(!addition.params||Array.isArray(addition.params)||typeof addition.params!=='object'))fail('TASK_INVALID','任务参数需要有效的 JSON 对象。');
-    const added={id:addition.id&&/^[\w-]{1,100}$/.test(addition.id)?addition.id:randomUUID(),kind:LEGACY_KIND(addition.kind||'generate'),title:addition.title,prompt:addition.prompt,params:addition.params||{},subject:addition.subject||'concept',sourceAssetId:addition.sourceAssetId||null,sourceRunId:null,position:addition.position||{x:100+(tasks.length%4)*340,y:120+Math.floor(tasks.length/4)*260},productSnapshot:project.productSnapshot};
+   for(const planned of suggestion.plan.additions) {
+    if(planned.kind==='video'&&!suggestion.allowVideo)fail('VIDEO_NOT_REQUESTED','未明确要求视频，不能新增视频任务。');
+    if(planned.params!==undefined&&(!planned.params||Array.isArray(planned.params)||typeof planned.params!=='object'))fail('TASK_INVALID','任务参数需要有效的 JSON 对象。');
+    const addition=renderPosterAddition(planned);
+    if(!String(addition.prompt||'').trim())fail('TASK_INVALID','AI 安排的节点缺少提示词，请重新安排。');
+    const added={id:addition.id&&/^[\w-]{1,100}$/.test(addition.id)?addition.id:randomUUID(),kind:LEGACY_KIND(addition.kind||'generate'),title:addition.title,prompt:addition.prompt,params:addition.params||{},subject:addition.subject||'concept',sourceAssetId:addition.sourceAssetId||null,sourceRunId:null,position:addition.position||{x:100+(tasks.length%4)*340,y:120+Math.floor(tasks.length/4)*260},productSnapshot:project.productSnapshot,...(addition.templateSnapshot?{templateSnapshot:clone(addition.templateSnapshot)}:{})};
     if(typeof addition.dimension==='string'&&addition.dimension.trim())added.dimension=addition.dimension.trim().slice(0,24);
     if(added.kind==='video')added.params=normalizeVideoParameters(added.params);
     tasks.push(added);

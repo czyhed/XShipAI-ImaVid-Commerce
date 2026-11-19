@@ -22,16 +22,21 @@ export function AssetFeed({ request, owner, params, size = PICKER_SIZE, onLoaded
 }
 
 // 提示词与参数模板选择：按图片 / 视频类型过滤，服务端搜索 + 加载更多；折叠区展开后才请求。
-export function TemplateSelect({ request, owner, kind, locked, enabled, onPick }) {
+// 已应用的模板留在下拉里（即使不在当前页），并显示占位符剩余数量，避免「选了没反应」的错觉。
+export function TemplateSelect({ request, owner, kind, locked, enabled, onPick, applied = null, prompt = '' }) {
   const [input, setInput] = useState('');
   const q = useDebounced(input, 300);
   const feed = useFeed({ request, owner, path: '/api/creation/templates', params: { type: kind, q }, size: PICKER_SIZE, enabled });
+  const value = applied?.id || '';
+  const options = applied && !feed.items.some(t => t.id === applied.id) ? [applied, ...feed.items] : feed.items;
+  const pending = (prompt.match(/\{\{[^{}]+\}\}/g) || []).length;
   return <div className="picker-feed">
     <DraftText type="search" className="picker-search" aria-label="搜索模板" placeholder="搜索模板名称" value={input} onCommit={setInput} />
-    <select aria-label="提示词与参数模板" value="" disabled={locked} onChange={event => { const template = feed.items.find(t => t.id === event.target.value); if (template) onPick(template); }}>
-      <option value="">选择模板</option>
-      {feed.items.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+    <select aria-label="提示词与参数模板" value={value} disabled={locked} onChange={event => { const template = feed.items.find(t => t.id === event.target.value) || options.find(t => t.id === event.target.value); if (template) onPick(template); }}>
+      {!value && <option value="">选择模板</option>}
+      {options.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
     </select>
+    {applied && <p className="picker-applied">{locked ? '使用中' : '已应用'}「{applied.name}」{pending ? ` · 提示词里还有 ${pending} 处 {{占位符}} 待替换` : ' · 占位符已全部替换'}</p>}
     {feed.error && <p className="vn-problem" role="alert">{feed.error}</p>}
     <LoadMore shown={feed.items.length} total={feed.total} hasMore={feed.hasMore} loading={feed.loadingMore} onClick={feed.loadMore} />
   </div>;

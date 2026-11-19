@@ -86,16 +86,22 @@ export class CreationLifecycle {
   const c=await this.store.pool.connect();
   try {
    await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',['sj:creation:'+workspace]);
-   const seeded=(await c.query("SELECT 1 FROM sj_creation_audit WHERE workspace_id=$1 AND action='creation.template_seeded' LIMIT 1",[workspace])).rows.length;
-   if(seeded){await c.query('COMMIT');return;}
-   for(const template of TEMPLATES) {
-    const hash=createHash('sha256').update(workspace+':'+template.id).digest('hex');
-    const id=`${hash.slice(0,8)}-${hash.slice(8,12)}-4${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`;
-    const size=template.compat.size.replace(/\s/g,'').replace('×','x');
-    const body={name:template.name,mediaKind:template.taskType==='video'?'video':'image',prompt:template.prompt,params:template.taskType==='video'?{duration:6}: /^\d+x\d+$/.test(size)?{size}:{},seedKey:template.id};
-    await c.query('INSERT INTO sj_creation_records(id,workspace_id,kind,body) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO NOTHING',[id,workspace,'template',body]);
+   // 按 seedVersion 分批补发：旧审计记录没有 version 字段，按 1 处理。这样已有工作区
+   // 能收到后来新增的模板，而用户删掉的旧模板不会在每次加载时被重新塞回来。
+   const done=new Set((await c.query("SELECT DISTINCT COALESCE(detail->>'version','1') AS version FROM sj_creation_audit WHERE workspace_id=$1 AND action='creation.template_seeded'",[workspace])).rows.map(row=>String(row.version)));
+   const versions=[...new Set(TEMPLATES.map(template=>template.seedVersion||1))].filter(version=>!done.has(String(version))).sort((a,b)=>a-b);
+   if(!versions.length){await c.query('COMMIT');return;}
+   for(const version of versions) {
+    const batch=TEMPLATES.filter(template=>(template.seedVersion||1)===version);
+    for(const template of batch) {
+     const hash=createHash('sha256').update(workspace+':'+template.id).digest('hex');
+     const id=`${hash.slice(0,8)}-${hash.slice(8,12)}-4${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`;
+     const size=template.compat.size.replace(/\s/g,'').replace('×','x');
+     const body={name:template.name,mediaKind:template.taskType==='video'?'video':'image',prompt:template.prompt,params:template.taskType==='video'?{duration:6}: /^\d+x\d+$/.test(size)?{size}:{},seedKey:template.id};
+     await c.query('INSERT INTO sj_creation_records(id,workspace_id,kind,body) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO NOTHING',[id,workspace,'template',body]);
+    }
+    await c.query('INSERT INTO sj_creation_audit(id,workspace_id,action,detail) VALUES($1,$2,$3,$4)',[randomUUID(),workspace,'creation.template_seeded',{count:batch.length,version}]);
    }
-   await c.query('INSERT INTO sj_creation_audit(id,workspace_id,action,detail) VALUES($1,$2,$3,$4)',[randomUUID(),workspace,'creation.template_seeded',{count:TEMPLATES.length}]);
    await c.query('COMMIT');
   }catch(error){await c.query('ROLLBACK');throw error;}finally{c.release();}
  }
