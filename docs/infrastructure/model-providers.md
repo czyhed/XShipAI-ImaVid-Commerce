@@ -11,6 +11,8 @@
 | 文本 / 读图 | OpenAI-compatible chat completions、Anthropic messages；文字与 base64 图片块；记录供应商返回用量 | 人工启用 text / vision 与执行器能力分别校验；图片消息额外要求 vision，不猜测模型名能力 |
 | 图片 | OpenAI-compatible images generations / edits，OMYAI JSON data URL、其他默认标准 multipart；服务端传图片字节 | 来源须已登记创作素材或明确成功版本；不接受浏览器自定端点 / 对象键；同步结果立即转存 |
 | 视频 | MiniMax H3，优云智算协议；文生 / 单图首帧、提交 / 查询 / 取消、下载 MP4 与转存 | adapter=minimax-h3 或显式 video=minimax-h3 执行配置；仅目录出现 video 不代表可执行；未做真实付费 H3 调用 |
+| 阿里云百炼 VideoRetalk | adapter=aliyun-lipsync：百炼 API Key，固定北京区域，按生成秒数后付费（约 ¥0.08/秒，含 1800 秒免费额度）；异步任务 + 轮询；见 `../technical/lipsync-providers.md` | 仅作对口型；视频与音频必须是公网 HTTPS；仅华北2；未做真实调用 |
+| 可灵（Kling） | adapter=kling：AccessKey + SecretKey 加密保存，地址固定北京节点，现签 HS256 JWT；详见 `../technical/kling-channel.md` | 对口型：identify-face → advanced-lip-sync → 轮询下载；无模型目录，不能作为文本 / 生图 / 视频渠道；需 SJ_MEDIA_PUBLIC_ORIGIN；未做真实调用 |
 
 供应商启动配置仅在相应环境变量存在时进行一次有审计的 bootstrap，不随每次启动覆盖管理员修改 / 删除：
 

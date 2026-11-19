@@ -28,6 +28,8 @@ H3 未做真实付费调用；截图识别需兼容 vision 模型，DeepSeek 启
 | `FUNCTIONAL_SPEC.md` | v2 功能基线；改范围先核对这里与 Q01—Q43，再同步导图 |
 | `requirements/creation-workbench-grilling.md` | 本次完整用户决定与清理 / 部署授权，补充文字优先于选项编号 |
 | `requirements/video-storyboard-v2-grilling.md` | 生视频重做 V-01～V-25：四种生成方式、素材引用与标签、分镜与画布单一配置、积分、火山语音配音与字幕；取代旧的「仅文生 / 首帧、成片无声」限制 |
+| `technical/README.md`、`technical/*.md` | 对齐后已实现的技术方案：人物持物口播、可灵渠道；随代码更新 |
+| `requirements/presenter-video-grilling.md`、`requirements/presenter-digital-human-gap.md` | 人物口播 v0.1 需求与实现；后者对齐「数字人持物口播」技术方案，记录已做（手拿商品图步骤、提示词选择、8 秒默认）与未做（只改嘴对口型、AI 标识、授权留痕）及已确认决策 |
 | `STATUS.md` | 当前能力、验证命令、部署边界、v1 历史归档；开发 / 维护后更新事实与结果 |
 | `CREATION_ACCEPTANCE.md` | 独立交互 QA、三轴审查、回归与发布证据边界 |
 | `CREATION_IMPLEMENTATION_PLAN.md` | v2 里程碑、QA / 评审、备份清理和发布完成记录 |

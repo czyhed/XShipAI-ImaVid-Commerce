@@ -1,5 +1,46 @@
 # 实现状态与变更记录
 
+## 2026-11-19 结果下载兼容 http 前缀
+
+阿里云任务成功后返回的结果地址是 `http://dashscope-result-*.oss-*.aliyuncs.com/...`，平台原先直接以「外链必须使用 HTTPS」拒绝，导致上传、提交、生成全部成功后卡在归档。`downloadMedia` 现在把 http 前缀升级为 https 再取（含重定向目标），仍不接受明文下载；域名不支持 HTTPS 时按下载失败处理。验证：aliyun / creation-lipsync / oss 单测 18/18、creation-video-v2 单测 11/11、check 通过；**2026-11-19 线上真实调用成功，阿里云 VideoRetalk 全链路（OSS 上传 → 提交 → 轮询 → 归档）首次跑通**。
+
+## 2026-11-19 修 OSS V1 签名多一个换行
+
+线上上传返回 `SignatureDoesNotMatch`，不是密钥问题：`StringToSign` 在 `CanonicalizedOSSHeaders` 为空时多插了一个空行（`Date` 与资源路径之间应是单个 `\n`），PUT 上传与预签名 GET 两处都错。按官方 SDK `buildCanonicalString` 的拼接方式改为 `[verb, md5, contentType, date, ...headers, resource].join('\n')`；单测补上两个用字面公式独立计算的签名断言，防止再次退化。验证：oss / aliyun 单测 12/12、check、build 通过；部署后需一次真实上传确认。
+
+## 2026-11-19 OSS 上传失败透出错误码
+
+线上点「只改嘴」首次走到 OSS 上传，返回 `素材上传到 OSS 失败（HTTP 403）` 但看不到原因。`uploadObject` 现在读取 OSS 的 XML 错误体，把 `<Code>` / `<Message>`、`x-oss-bucket-region` 一起放进提示，并按 `AccessDenied` / `InvalidAccessKeyId` / `SignatureDoesNotMatch` / `NoSuchBucket` 给出对应排查方向。文档补充：预签名链接的权限跟随 AccessKey，RAM 策略必须同时给 `oss:PutObject` 与 `oss:GetObject`，只给写权限会在阿里云下载阶段二次失败。部署镜像 `xshipai/shangjing:20261119-023452`。验证：oss / aliyun / presenter 单测 25/25、check、build 通过；真实调用待用户在渠道里配好权限后重试。
+
+## 2026-11-19 OSS 中转配置可持久保存
+
+再次编辑渠道时回填 Bucket、地域与 AccessKey 末四位，AccessKey ID / Secret 留空即沿用已保存值（服务端按字段合并），勾「清除已保存的 OSS 配置」才删除。非敏感展示信息存在 `executor_config.oss`，密钥仍在加密字段。验证：oss / aliyun / presenter 单测 24/24、check、build 通过。
+
+## 2026-11-19 对口型改用 OSS 中转
+
+线上实测阿里云抓取 18445 返回 `Connection refused`，443 又被云防火墙挡住（该机器不在可管理的云账号内）。新增 `server/providers/oss-transfer.mjs`：阿里云对口型渠道可填 Bucket / 地域 / AccessKey，提交时先把底片与配音上传到用户私有 OSS，再用 1 小时签名链接交给 VideoRetalk；未配置时回退平台签名链接。渠道密钥与 OSS 配置一起加密保存。验证：oss-transfer + aliyun + presenter 单测 23/23、check、build 通过；未做真实 OSS / 阿里云调用。
+
+## 2026-11-19 口播提示词按比例约束重写
+
+持物图 / 定妆照提示词改为几何量：半身中景非特写、机位 1.5–2 米、人物占画面高度约 80%、头顶留白约 10%、整张脸不被边缘裁切。视频首帧提示词单独强调「不推近、不拉远、不缩放、不摇移、不平移」「人物停在画面中央、与镜头距离不变、不变成特写」。另修「环节默认 → 对口型」只认可灵渠道、新增阿里云渠道不自动设为默认、执行端忽略阿里云默认三项。说明见 `docs/technical/presenter-held-product-video.md`。
+
+
+## 2026-11-19 签名媒体链接对外可用
+
+线上配置 `SJ_MEDIA_PUBLIC_ORIGIN=https://sj.chenzy-ai-project.icu:18445` 与签名密钥；18445 的 Nginx vhost 改为直连容器（`127.0.0.1:18307 -> 4173`），不再经 18306 网关的强制登录；`server/http.mjs` 对签名媒体路径免会话。外网实测假签名返回 403 `INVALID_MEDIA_SIGNATURE`。镜像 `xshipai/shangjing:20261119-003318`。细节见 `docs/technical/lipsync-providers.md`。
+
+## 2026-11-19 口播视频脸不完整修复
+
+有手拿商品图时，口播分镜一律首帧模式、后期配音、比例 `adaptive`（跟随持物图），不再走 H3 参考模式整幅重绘；真实口型改用「只改嘴」。持物图 / 定妆照 / 视频提示词改为半身中景、头顶留白、脸不被边缘裁切。本镜预览按视频自身比例显示（`contain`）。说明见 `docs/technical/presenter-held-product-video.md`。验证：presenter 与对口型单测 25/25（含新增持物图首帧用例）、check、build 通过；`npm test` 全量本机未跑通（Docker Desktop 未启动，PostgreSQL 一次性容器无法创建），未做真实付费样片。
+
+## 2026-11-18 可灵对口型执行器
+
+新增对口型两家执行器：`server/providers/creation-lipsync.mjs`（可灵）与 `server/providers/creation-aliyun-lipsync.mjs`（阿里云百炼 VideoRetalk，约 ¥0.08/秒、无资源包门槛，推荐默认）；模型中心「对口型」环节默认、分镜「只改嘴」按钮与结果展示。视频经既有签名临时链接外传，需要 `SJ_MEDIA_PUBLIC_ORIGIN` 与 `SJ_MEDIA_SIGNING_KEY`；线上实例目前是 IP、没有公开 HTTPS 域名，因此按钮会提示先配置。验证：对口型单测 10/10（阿里云 5、可灵 5）、presenter 与 kling 单测共 24/24、check、build 通过；未做真实可灵调用。
+
+## 2026-11-18 人物口播：手拿商品图与可灵渠道
+
+已部署到 110.42.51.234 的 shangjing 实例，镜像 `xshipai/shangjing:20261118-224950`（上一版 `20261118-154054`）。新增向导「3. 手拿商品图」与提示词预设、8 秒默认（可改 5–10 秒）、持物图作为视频首帧 / 唯一参考；新增可灵渠道（AccessKey + SecretKey，只存凭据，对口型执行器未接入）。技术文档见 `technical/`。验证：presenter 与 kling 单测 15/15、check、build 通过；依赖 Docker PostgreSQL 的用例本机未能运行；无真实付费调用，线上未做真实出图验证。
+
 ## 2026-11-01 XShipAI 测试副本图片 Logo
 
 按用户反馈使用简洁的绿色扁平购物袋 PNG，源文件为 `web/public/logo.png`，同步顶部导航、登录页、favicon 与 XShipAI 工作台商境入口。代码 `242a378` 已推送 GitHub main。构建通过，独立浏览器验收确认顶部 Logo、favicon、375px 窄屏正常，线上 PNG 与源文件及工作台副本 SHA-256 一致；仅更新应用镜像，业务数据、模型渠道和后台任务保持不变。部署及回退见 [XShipAI 部署说明](../infra/xshipai/README.md)，设计提示词见 [Logo 记录](brand-logo.md)。
