@@ -13,8 +13,8 @@ export function same(a, b) {
  for (const key of keys) if (!same(a[key], b[key])) return false;
  return true;
 }
-// 服务端独占写入的节点字段，客户端既不提交也不比较。
-const SERVER_ONLY = new Set(['id', 'dialogueAudio']);
+// 服务端独占写入的节点字段，客户端既不提交也不比较（配音与只改嘴结果都由服务端保存）。
+const SERVER_ONLY = new Set(['id', 'dialogueAudio', 'lipsync']);
 const minShot = shot => ({ id: shot.id, title: shot.title ?? '', description: shot.description ?? '', nodeId: shot.nodeId ?? null });
 
 // 把项目详情里与保存相关的部分取成快照；分镜只取脚本与分镜表（批次 / 成片状态不属于用户编辑）。
@@ -40,7 +40,7 @@ function diffTask(before, after) {
  }
  return Object.keys(fields).length || unset.length ? { type: 'task.patch', id: after.id, ...(Object.keys(fields).length ? { fields } : {}), ...(unset.length ? { unset } : {}) } : null;
 }
-const withoutServerOnly = task => Object.fromEntries(Object.entries(task).filter(([key]) => key !== 'dialogueAudio'));
+const withoutServerOnly = task => Object.fromEntries(Object.entries(task).filter(([key]) => !SERVER_ONLY.has(key) || key === 'id'));
 
 // 前后快照 → 操作列表。顺序保证服务端按依赖应用：先建任务容器与删连线 / 节点，再加节点与连线。
 export function diffOps(prev, next) {
@@ -101,7 +101,7 @@ export function applyOps(project, ops) {
   } else if (op.type === 'task.patch') {
    const index = next.tasks.findIndex(t => t.id === op.id);
    if (index < 0) continue;
-   const { id: _id, dialogueAudio: _audio, ...fields } = clone(op.fields || {});
+   const { id: _id, dialogueAudio: _audio, lipsync: _lip, ...fields } = clone(op.fields || {});
    const merged = { ...next.tasks[index], ...fields };
    for (const key of op.unset || []) if (!SERVER_ONLY.has(key)) delete merged[key];
    next.tasks[index] = merged;

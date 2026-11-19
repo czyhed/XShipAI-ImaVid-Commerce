@@ -12,6 +12,16 @@ test('diffOps: only changed task fields are emitted, ids and dialogueAudio are n
   assert.deepEqual(diffOps(prev, prev), []);
 });
 
+test('lipsync is server-only: snapshots never emit it and operations cannot overwrite it', () => {
+  // 客户端草稿里残留的只改嘴状态不参与比较，避免刷新前后把服务端结果改掉。
+  assert.deepEqual(diffOps(project({ tasks: [task('a', { lipsync: { status: 'running' } })] }), project({ tasks: [task('a', { lipsync: { status: 'failed' } })] })), []);
+  const added = diffOps(project({ tasks: [] }), project({ tasks: [task('n', { lipsync: { status: 'succeeded', assetId: 'v1' } })] })).find(op => op.type === 'task.add');
+  assert.equal('lipsync' in added.task, false);
+  const server = project({ tasks: [task('a', { lipsync: { status: 'succeeded', assetId: 'v1' } })] });
+  const out = applyOps(server, [{ type: 'task.patch', id: 'a', fields: { lipsync: null } }, { type: 'task.patch', id: 'a', unset: ['lipsync'] }]);
+  assert.deepEqual(out.tasks[0].lipsync, { status: 'succeeded', assetId: 'v1' });
+});
+
 test('diffOps: removed keys become unset, null stays a value', () => {
   const prev = project({ tasks: [task('a', { sourceRunId: 'r', tailFrame: { x: 1 } }), task('b')] });
   const next = project({ tasks: [task('a', { sourceRunId: null }), task('b')] });

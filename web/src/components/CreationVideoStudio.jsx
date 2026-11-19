@@ -61,6 +61,9 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
  // 页面级错误统一走顶部提示；时长等字段错误仍留在输入框旁。
  const fail = useCallback(message => { setError(message || ''); if (message) notify?.(message, 'error'); }, [notify]);
  const nodeOf = shot => (shot?.nodeId ? canvasDraft?.tasks.find(t => t.id === shot.nodeId) : null) || null;
+ // 只改嘴的结果保存在节点上（服务端写入）。刷新页面后用节点上的状态兜底，已生成的结果不会「消失」。
+ const lipOf = shot => lipsync[shot.id] || nodeOf(shot)?.lipsync || {};
+ const resumedLipsync = useRef(new Set());
  const plainShots = () => (editor.storyboard()?.shots || []).map(({ id, title, description, nodeId }) => ({ id, title, description, nodeId: nodeId || null }));
  const patchShots = update => editor.patchStoryboard({ shots: update(plainShots()) });
  const patchShot = (shotId, patch) => patchShots(shots => shots.map(s => s.id === shotId ? { ...s, ...patch } : s));
@@ -182,6 +185,20 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
   }
  });
  useEffect(() => () => { Object.values(lipTimers.current).forEach(clearTimeout); }, []);
+ // 刷新页面后，服务端仍标记为「处理中」的只改嘴任务继续轮询；已完成的直接由节点状态显示结果。
+ useEffect(() => {
+  const pending = draft.shots.filter(shot => shot.nodeId && nodeOf(shot)?.lipsync?.status === 'running' && !resumedLipsync.current.has(shot.id));
+  if (!pending.length) return;
+  setLipsync(old => {
+   let changed = false; const next = { ...old };
+   for (const shot of pending) if (!next[shot.id]) { next[shot.id] = nodeOf(shot).lipsync; changed = true; }
+   return changed ? next : old;
+  });
+  for (const shot of pending) {
+   resumedLipsync.current.add(shot.id);
+   lipTimers.current[shot.id] = setTimeout(() => pollLipsync(shot.id, shot.nodeId), 800);
+  }
+ }, [canvasDraft?.tasks]);
  const removeShot = shot => guard(async () => {
   const index = draft.shots.findIndex(s => s.id === shot.id);
   patchShots(shots => shots.filter(s => s.id !== shot.id));
@@ -260,6 +277,7 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
   const versions = node ? succeededRuns(runs, node.id) : [];
   const dub = node ? editor.dubState?.(node.id) : null;
   const dubAsset = dubAssetFor(editor.dubState, node?.id, state.shown);
+  const lip = lipOf(shot);
   const head = <div className="vs-shot-head"><span className="vs-shot-no">{index + 1}</span><strong>{titleOf(shot)}</strong>
    <span className={`v3-badge ${state.status}`}>{isActive(state.status) && <i className="v3-pulse" />}{statusLabels[state.status] || '未生成'}</span>
    {item && <span className={`v3-badge vs-item ${item.status}`} aria-label="批量状态">批量：{batchItemLabels[item.status]}</span>}
@@ -332,13 +350,13 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
        <button className="v3-btn small primary" disabled={!writable || busy || saving || isActive(state.status)} onClick={() => runShot(shot)}>{state.status === 'failed' ? '重试本镜' : '生成本镜'}</button>
        {versions.length > 0 && <button className="v3-btn small" disabled={!writable || busy || saving || isActive(state.status)} onClick={() => runShot(shot, { regenerate: true })}>再生成一版</button>}
        {state.asset && <button className="v3-btn small" title="用 ffmpeg 去掉这段视频的音轨，不消耗积分" disabled={!writable || busy || saving || isActive(state.status)} onClick={() => stripShot(shot, state.shown?.id)}>去除音轨</button>}
-       {state.asset && dub?.status === 'fresh' && <button className="v3-btn small" title="保留底片画面，只重画嘴部；使用模型中心「环节默认 → 对口型」的渠道（阿里云 / 可灵），会产生费用" disabled={!writable || busy || saving || lipsync[shot.id]?.status === 'running'} onClick={() => runLipsync(shot)}>{lipsync[shot.id]?.status === 'running' ? '只改嘴处理中…' : '只改嘴'}</button>}
+       {state.asset && dub?.status === 'fresh' && <button className="v3-btn small" title="保留底片画面，只重画嘴部；使用模型中心「环节默认 → 对口型」的渠道（阿里云 / 可灵），会产生费用" disabled={!writable || busy || saving || lip.status === 'running'} onClick={() => runLipsync(shot)}>{lip.status === 'running' ? '只改嘴处理中…' : '只改嘴'}</button>}
       </div>
-      {lipsync[shot.id]?.assetId && <div className="vs-lipsync-result">
+      {lip.assetId && <div className="vs-lipsync-result">
        <p className="v3-note">只改嘴结果（原片与配音保留，只有嘴部按配音重画）：</p>
-       <video className="vs-shot-preview" src={fileUrl(lipsync[shot.id].assetId)} muted controls preload="metadata" />
+       <video className="vs-shot-preview" src={fileUrl(lip.assetId)} muted controls preload="metadata" />
       </div>}
-      {lipsync[shot.id]?.status === 'failed' && <p className="v3-note" role="status">只改嘴未完成：{lipsync[shot.id].error?.message || (typeof lipsync[shot.id].error === 'string' ? lipsync[shot.id].error : '') || '请稍后重试'}</p>}
+      {lip.status === 'failed' && <p className="v3-note" role="status">只改嘴未完成：{lip.error?.message || (typeof lip.error === 'string' ? lip.error : '') || '请稍后重试'}</p>}
       {state.status === 'failed' && <p className="v3-note" title={state.run?.error?.message || ''}>上次失败：{state.run?.error?.message || '请查看错误后重试'}</p>}
      </Section>
     </div>

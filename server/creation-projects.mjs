@@ -1871,8 +1871,8 @@ export class CreationProjects {
    const next=clone(current);
    if(body.name!==undefined) {if(typeof body.name!=='string'||!body.name.trim()||body.name.length>200) fail('NAME_INVALID','项目名称需要1至200个字符。');next.name=body.name.trim();}
    if(body.tasks!==undefined) {
-    // dialogueAudio 只由服务端「合成配音」写入：客户端传来的值一律忽略，保留当前节点上已有的。
-    next.tasks=clone(body.tasks).map(t=>{const {dialogueAudio:_ignored,...rest}=t;const existing=current.tasks.find(c=>c.id===t.id)?.dialogueAudio;return existing?{...rest,dialogueAudio:existing}:rest;});
+    // dialogueAudio 与 lipsync 只由服务端写入：客户端传来的值一律忽略，保留当前节点上已有的。
+    next.tasks=clone(body.tasks).map(t=>{const {dialogueAudio:_ignoredAudio,lipsync:_ignoredLipsync,...rest}=t;const existing=current.tasks.find(c=>c.id===t.id);const kept={};if(existing?.dialogueAudio)kept.dialogueAudio=existing.dialogueAudio;if(existing?.lipsync)kept.lipsync=existing.lipsync;return {...rest,...kept};});
    }
    if(body.voiceRoles!==undefined) {
     next.voiceRoles=this.checkedVoiceRoles(body.voiceRoles);
@@ -1940,16 +1940,16 @@ export class CreationProjects {
      const patched=await this.patchStoryboard(workspace,next,{script:op.script,shots:op.shots,settings:op.settings},client);
      next.storyboard=patched.storyboard;next.tasks=patched.tasks;next.edges=patched.edges;
     }else if(op.type==='task.add') {
-     const {dialogueAudio:_ignored,...task}=clone(op.task);
+     const {dialogueAudio:_ignored,lipsync:_ignoredLip,...task}=clone(op.task);
      if(next.tasks.some(t=>t.id===task.id)) {skip('exists');continue;}
      if(task.workflowId&&next.workflows&&!next.workflows.some(w=>w.id===task.workflowId)) {skip('workflow-missing');continue;}
      next.tasks.push(task);
     }else if(op.type==='task.patch') {
      const index2=next.tasks.findIndex(t=>t.id===op.id);
      if(index2<0) {skip('missing');continue;}
-     const {id:_id,dialogueAudio:_audio,...fields}=clone(op.fields||{});
+     const {id:_id,dialogueAudio:_audio,lipsync:_lip,...fields}=clone(op.fields||{});
      const merged={...next.tasks[index2],...fields};
-     for(const key of op.unset||[])if(key!=='id'&&key!=='dialogueAudio')delete merged[key];
+     for(const key of op.unset||[])if(key!=='id'&&key!=='dialogueAudio'&&key!=='lipsync')delete merged[key];
      next.tasks[index2]=merged;
     }else if(op.type==='task.remove') {
      if(!next.tasks.some(t=>t.id===op.id)) {skip('missing');continue;}

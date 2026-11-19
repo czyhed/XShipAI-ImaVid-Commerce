@@ -283,3 +283,28 @@ test('presenterHeldImage builds an edit node with person first and product image
  assert.deepEqual(sources, [person, product]);
  assert.equal(result.created.taskId, node.id);
 });
+
+test('client saves keep the server-owned lipsync state on the node', async () => {
+ const { CreationProjects } = await import('../server/creation-projects.mjs');
+ const { randomUUID } = await import('node:crypto');
+ const projectId = randomUUID(), nodeId = randomUUID();
+ const node = { id: nodeId, kind: 'video', title: '分镜', prompt: '', params: {}, position: { x: 0, y: 0 }, dialogueAudio: { assetId: 'a1' }, lipsync: { status: 'succeeded', assetId: 'v1' } };
+ let saved = { id: projectId, kind: 'project', revision: 1, name: '只改嘴', tasks: [node], edges: [], workflows: [{ id: 'w', title: '创作任务' }], voiceRoles: [] };
+ const service = new CreationProjects({
+  async change(_workspace, _id, _expected, fn) { saved = await fn(saved, {}); return saved; },
+  async get() { return null; },
+ }, {});
+ service.finalizeEdit = async () => {};
+ service.detail = async () => ({ project: saved, runs: [], dubStates: {}, cost: {} });
+
+ // 整项目保存：客户端即便带着旧的 / 伪造的 lipsync，也保留服务端已保存的结果。
+ await service.update('w', projectId, { revision: 1, tasks: [{ ...node, prompt: '新提示词', lipsync: { status: 'failed' }, dialogueAudio: { assetId: 'forged' } }] });
+ assert.equal(saved.tasks[0].prompt, '新提示词');
+ assert.deepEqual(saved.tasks[0].lipsync, { status: 'succeeded', assetId: 'v1' });
+ assert.deepEqual(saved.tasks[0].dialogueAudio, { assetId: 'a1' });
+
+ // 增量保存：task.patch 的 fields / unset 都不能改动 lipsync。
+ await service.applyOps('w', projectId, { ops: [{ type: 'task.patch', id: nodeId, fields: { lipsync: null, prompt: '再改一次' } }, { type: 'task.patch', id: nodeId, unset: ['lipsync'] }] });
+ assert.equal(saved.tasks[0].prompt, '再改一次');
+ assert.deepEqual(saved.tasks[0].lipsync, { status: 'succeeded', assetId: 'v1' });
+});
