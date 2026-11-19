@@ -1,5 +1,9 @@
 # 实现状态与变更记录
 
+## 2026-11-19 只改嘴结果刷新后不显示
+
+对口型成功后结果素材已经保存，节点上也写了 `lipsync`；但视频工作台只读本页的 React 状态，刷新后为空，看起来像「没有保存」。另外整项目保存会把客户端任务整体回写，可能覆盖服务端写入的 `lipsync`。现在：工作台用节点上的 `lipsync` 兜底显示，并对仍处于「处理中」的任务继续轮询；`lipsync` 与 `dialogueAudio` 一样改为服务端独占写入，整项目保存与增量操作都忽略客户端的值。验证：creation-sync / presenter / video-studio 单测 45/45、check、build 通过。
+
 ## 2026-11-19 结果下载兼容 http 前缀
 
 阿里云任务成功后返回的结果地址是 `http://dashscope-result-*.oss-*.aliyuncs.com/...`，平台原先直接以「外链必须使用 HTTPS」拒绝，导致上传、提交、生成全部成功后卡在归档。`downloadMedia` 现在把 http 前缀升级为 https 再取（含重定向目标），仍不接受明文下载；域名不支持 HTTPS 时按下载失败处理。验证：aliyun / creation-lipsync / oss 单测 18/18、creation-video-v2 单测 11/11、check 通过；**2026-11-19 线上真实调用成功，阿里云 VideoRetalk 全链路（OSS 上传 → 提交 → 轮询 → 归档）首次跑通**。
