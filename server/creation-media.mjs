@@ -80,16 +80,18 @@ export class CreationMedia {
   const asset=await this.store.get(workspace,id);if(!asset||asset.kind!=='asset')throw new AppError('NOT_FOUND','素材不存在。',404);
   try {await this.removeObject(asset.objectKey);}catch{throw new AppError('MEDIA_DELETE_FAILED','对象版本清理失败，请核对存储权限后重试；记录尚未永久删除。',503);}
  }
- publicUrl(workspace,id) {
+ // 默认 5 分钟；对口型等外部异步任务可能排队，允许调用方申请更长有效期（上限 1 小时）。
+ publicUrl(workspace,id,ttlSeconds=300) {
   let origin;try {origin=new URL(this.publicOrigin);}catch{throw new AppError('PUBLIC_MEDIA_UNAVAILABLE','首帧外传需要配置可信公开 TLS 媒体地址。',503);}
   if(origin.protocol!=='https:'||origin.username||origin.password||origin.pathname!=='/'||origin.search||origin.hash||!this.signingKey||Buffer.byteLength(this.signingKey)<32)throw new AppError('PUBLIC_MEDIA_UNAVAILABLE','首帧外传需要可信公开 TLS 地址和独立签名密钥。',503);
-  const expires=Math.floor(Date.now()/1000)+300,signature=this.signature(workspace,id,expires);
+  const ttl=Math.min(Math.max(Number(ttlSeconds)||300,60),3600);
+  const expires=Math.floor(Date.now()/1000)+ttl,signature=this.signature(workspace,id,expires);
   return `${origin.origin}/api/creation/media/${encodeURIComponent(id)}/public?${new URLSearchParams({workspace,expires:String(expires),signature})}`;
  }
  signature(workspace,id,expires){return createHmac('sha256',this.signingKey).update(JSON.stringify([workspace,id,Number(expires)])).digest('hex');}
  verifyPublic(workspace,id,expires,signature) {
   const timestamp=Number(expires),now=Math.floor(Date.now()/1000);
-  if(!this.signingKey||!Number.isInteger(timestamp)||timestamp<now||timestamp>now+300||!/^[a-f0-9]{64}$/.test(String(signature)))throw new AppError('INVALID_MEDIA_SIGNATURE','媒体链接无效或已过期。',403);
+  if(!this.signingKey||!Number.isInteger(timestamp)||timestamp<now||timestamp>now+3600||!/^[a-f0-9]{64}$/.test(String(signature)))throw new AppError('INVALID_MEDIA_SIGNATURE','媒体链接无效或已过期。',403);
   const expected=this.signature(workspace,id,timestamp);if(!timingSafeEqual(Buffer.from(expected),Buffer.from(signature)))throw new AppError('INVALID_MEDIA_SIGNATURE','媒体链接无效或已过期。',403);
  }
 }

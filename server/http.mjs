@@ -13,6 +13,9 @@ import {
 } from './access.mjs';
 import { MAX_UPLOAD_BYTES } from './uploads.mjs';
 
+// 对外签名的媒体读取路径（/api/creation/media/:id/public），签名由路由校验。
+const SIGNED_MEDIA = /^\/api\/creation\/media\/[\da-f-]{36}\/public$/i;
+
 const staticFiles = new Map([
   ['/logo.png', ['web/dist/logo.png', 'image/png']],
   ['/', ['web/dist/index.html', 'text/html; charset=utf-8']],
@@ -186,7 +189,9 @@ export function createServer({ store, assets, registry, service, channels, auth,
         const cookies = parseCookies(req.headers.cookie);
         if (cookies[SESSION_COOKIE]) session = await auth.authenticate(cookies[SESSION_COOKIE]);
         if (path.startsWith('/api/')) {
-          const publicRequest = (req.method === 'GET' && path === '/api/session')
+          // 签名媒体链接：阿里云 / 可灵等外部服务没有会话，凭 URL 里的 HMAC 签名访问；
+          // 签名在路由里用 verifyPublic 校验，未签名或签名不符仍返回 403。
+          const publicRequest = (req.method === 'GET' && (path === '/api/session' || SIGNED_MEDIA.test(path)))
             || (req.method === 'POST' && (path === '/api/session' || path === '/api/setup/admin'));
           if (!publicRequest && !session) throw new AppError('UNAUTHENTICATED', '请先登录。', 401);
           const allowedWhileChanging = (req.method === 'GET' && path === '/api/session')

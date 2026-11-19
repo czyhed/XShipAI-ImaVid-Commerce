@@ -6,6 +6,8 @@ import { AppError } from './errors.mjs';
 import { ChannelStore } from './channels.mjs';
 import { discoverModels, secureTransport, sourceData, usageRecord } from './providers/creation-http.mjs';
 import { synthesize, designVoice, downloadDemoAudio } from './providers/volc-tts.mjs';
+import { submitLipSync, pollLipSync } from './providers/creation-lipsync.mjs';
+import { submitAliyunLipSync, pollAliyunLipSync } from './providers/creation-aliyun-lipsync.mjs';
 import { VOLC_RESOURCES } from '../shared/creation-voice.mjs';
 
 export class ModelHub {
@@ -31,6 +33,7 @@ export class ModelHub {
     const channel = await this.channels.getSecret(channelId);
     if (!channel) throw new AppError('CHANNEL_NOT_FOUND', '渠道不存在。', 404);
     if (channel.adapter === 'volcengine-tts') throw new AppError('SYNC_NOT_SUPPORTED', '火山引擎语音渠道没有模型目录，不需要同步。', 422);
+    if (channel.adapter === 'kling' || channel.adapter === 'aliyun-lipsync') throw new AppError('SYNC_NOT_SUPPORTED', '对口型渠道没有模型目录，不需要同步。', 422);
     const models = await discoverModels(this.transport, channel);
     const save=async hub=>{
       await hub.pool.query('UPDATE sj_channel_models SET available=false WHERE channel_id=$1 AND manual=false', [channelId]);
@@ -165,6 +168,45 @@ export class ModelHub {
     const existing=(await this.pool.query("SELECT 1 FROM sj_creation_defaults WHERE stage='voice'")).rowCount;
     if(!existing)await this.setVoiceDefault(channelId);
   }
+  // 对口型环节：默认指向一个可灵渠道（渠道没有模型目录，model_id 固定为 'lipsync'）。
+  async setLipsyncDefault(channelId) {
+    const channel=await this.channels.get(channelId);
+    if(!channel)throw new AppError('CHANNEL_NOT_FOUND','渠道不存在。',404);
+    if(!['kling','aliyun-lipsync'].includes(channel.adapter))throw new AppError('MODEL_INCOMPATIBLE','对口型环节只能选择可灵或阿里云对口型渠道。',422);
+    await this.pool.query(`INSERT INTO sj_creation_defaults(stage,channel_id,model_id) VALUES('lipsync',$1,'lipsync') ON CONFLICT(stage) DO UPDATE SET channel_id=excluded.channel_id,model_id=excluded.model_id`,[channelId]);
+    return {channelId,modelId:'lipsync',adapter:channel.adapter,executorConfig:channel.executorConfig};
+  }
+  async ensureLipsyncDefault(channelId) {
+    const existing=(await this.pool.query("SELECT 1 FROM sj_creation_defaults WHERE stage='lipsync'")).rowCount;
+    if(!existing)await this.setLipsyncDefault(channelId);
+  }
+  // 当前可用的对口型渠道（含密钥，仅服务端内部使用）：优先指定渠道，其次默认环节，再次第一个启用的可灵渠道。
+  async lipsyncChannel(client=this.pool, channelId='') {
+    let channel=channelId?await this.channels.getSecret(channelId,client):null;
+    if(!channel){
+      const preferred=(await client.query("SELECT channel_id FROM sj_creation_defaults WHERE stage='lipsync'")).rows[0]?.channel_id;
+      channel=preferred?await this.channels.getSecret(preferred,client):null;
+    }
+    if(!channel||!['kling','aliyun-lipsync'].includes(channel.adapter)){
+      const found=(await this.channels.list(client)).find(c=>['kling','aliyun-lipsync'].includes(c.adapter)&&c.enabled);
+      channel=found?await this.channels.getSecret(found.id,client):null;
+    }
+    if(!channel||!['kling','aliyun-lipsync'].includes(channel.adapter))throw new AppError('LIPSYNC_NOT_CONFIGURED','请先在模型中心配置对口型渠道（阿里云百炼 VideoRetalk 或可灵）。',422);
+    if(!channel.enabled)throw new AppError('LIPSYNC_NOT_CONFIGURED','对口型渠道已停用，请在模型中心启用或新增渠道。',422);
+    return channel;
+  }
+  async lipsyncConfigured(client=this.pool) {
+    try{await this.lipsyncChannel(client);return true;}catch(error){if(error instanceof AppError)return false;throw error;}
+  }
+  async lipsyncSubmit({videoUrl,audio,video,audioUrl,durationSec,faceId=''}, client=this.pool) {
+    const channel=await this.lipsyncChannel(client);
+    if(channel.adapter==='aliyun-lipsync')return submitAliyunLipSync(this.transport,channel,{video,audio,videoUrl,audioUrl,durationSec});
+    return submitLipSync(this.transport,channel,{videoUrl,audio,durationSec,faceId});
+  }
+  async lipsyncPoll(upstreamId, channelId='', client=this.pool) {
+    const channel=await this.lipsyncChannel(client,channelId);
+    return channel.adapter==='aliyun-lipsync'?pollAliyunLipSync(this.transport,channel,upstreamId):pollLipSync(this.transport,channel,upstreamId);
+  }
   // 当前可用的语音渠道（含密钥，仅服务端内部使用）：优先默认环节，其次第一个启用的火山语音渠道。
   async voiceChannel(client=this.pool) {
     const preferred=(await client.query("SELECT channel_id FROM sj_creation_defaults WHERE stage='voice'")).rows[0]?.channel_id;
@@ -208,6 +250,7 @@ export class ModelHub {
   downloadVoiceDemo(url) {return downloadDemoAudio(this.transport,url);}
   async setDefault(stage, channelId, modelId) {
     if(stage==='voice')return this.setVoiceDefault(channelId);
+    if(stage==='lipsync')return this.setLipsyncDefault(channelId);
     const model=await this.resolve(stage,{channelId,modelId});
     await this.pool.query(`INSERT INTO sj_creation_defaults(stage,channel_id,model_id) VALUES($1,$2,$3) ON CONFLICT(stage) DO UPDATE SET channel_id=excluded.channel_id,model_id=excluded.model_id`,[stage,channelId,modelId]);
     return model;
@@ -227,13 +270,15 @@ export class ModelHub {
   }
 }
 
-const CAPABILITIES=['text','vision','image','video'];
-const STAGES={product:['text'],planning:['text'],image:['image'],video:['video']};
-const STAGE_LABELS={product:'商品聊天',planning:'AI 规划',image:'生图',video:'视频',voice:'语音配音'};
+const CAPABILITIES=['text','vision','image','video','lipsync'];
+const STAGES={product:['text'],planning:['text'],image:['image'],video:['video'],lipsync:['lipsync']};
+const STAGE_LABELS={product:'商品聊天',planning:'AI 规划',image:'生图',video:'视频',voice:'语音配音',lipsync:'对口型'};
 function validateModelId(value) { if(typeof value!=='string'||!value.trim()||value.length>200||/[\r\n]/.test(value))throw new AppError('INVALID_MODEL_ID','模型 ID 需为 1–200 个字符。',422); }
 function executorCapabilities(channel) {
  const adapter=channel?.adapter||'openai-compatible';
  if(adapter==='volcengine-tts')return ['voice'];
+ // 可灵只用于对口型，不能被当作文本 / 生图 / 视频渠道选中。
+ if(adapter==='kling'||adapter==='aliyun-lipsync')return ['lipsync'];
  const result=adapter==='anthropic'?['text','vision']:adapter==='minimax-h3'?['video']:['text','vision','image'];
  if(channel?.executorConfig?.video==='minimax-h3'&&!result.includes('video'))result.push('video');
  return result;

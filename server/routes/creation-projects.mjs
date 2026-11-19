@@ -18,7 +18,7 @@ function result(res,reply,data,status=200) {
 export function routes() {
  const collection=/^\/api\/creation\/projects$/;
  const item=/^\/api\/creation\/projects\/([\da-f-]{36})$/i;
- const action=/^\/api\/creation\/projects\/([\da-f-]{36})\/(preview|start|suggest|apply-suggestion|sync-product|recover|cancel|export|composite)$/i;
+ const action=/^\/api\/creation\/projects\/([\da-f-]{36})\/(preview|start|suggest|apply-suggestion|sync-product|recover|cancel|export|composite|presenter|presenter-script|presenter-image|presenter-held-image|presenter-lipsync|presenter-lipsync-status)$/i;
  const ops=/^\/api\/creation\/projects\/([\da-f-]{36})\/ops$/i;
  const status=/^\/api\/creation\/projects\/([\da-f-]{36})\/status$/i;
  const storyboard=/^\/api\/creation\/projects\/([\da-f-]{36})\/storyboard$/i;
@@ -56,7 +56,7 @@ export function routes() {
   {method:'POST',pattern:action,async handler({ctx,match,req,body,res,reply}){
    const action=match[2];
    if(action==='preview'||action==='export')requireViewer(ctx);else requireOperator(ctx);
-   const method={'apply-suggestion':'applySuggestion','sync-product':'syncProduct'}[action]||action;
+   const method={'apply-suggestion':'applySuggestion','sync-product':'syncProduct','presenter':'createPresenter','presenter-script':'presenterScript','presenter-image':'presenterImage','presenter-held-image':'presenterHeldImage','presenter-lipsync':'presenterLipsync','presenter-lipsync-status':'presenterLipsyncStatus'}[action]||action;
    const data=await service(ctx)[method](creationWorkspaceId(ctx),projectId(match),revisionBody(req,body));
    if(action==='export') {
     res.writeHead(200,{'Content-Type':'application/zip','Content-Disposition':`attachment; filename="project.zip"; filename*=UTF-8''${encodeURIComponent(data.name)}`,'Content-Length':data.bytes.length,'Cache-Control':'private, no-store'});

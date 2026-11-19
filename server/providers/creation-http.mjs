@@ -1,6 +1,7 @@
 import { Agent, fetch as undiciFetch } from 'undici';
 import { AppError } from '../errors.mjs';
 import { assertSafeHttpUrl, createSafeLookup } from '../link-parse.mjs';
+import { klingJwt } from './kling-auth.mjs';
 
 const agent = new Agent({ connect: { lookup: createSafeLookup() } });
 export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -30,7 +31,9 @@ export const VIDEO_SUBMIT_TIMEOUT_MS = 300000;
 export async function requestJson(transport, channel, path, {method='GET', body, headers={}, timeoutMs=DEFAULT_REQUEST_TIMEOUT_MS} = {}) {
   const url = validateUrl(channel.baseUrl.replace(/\/$/,'') + path,{local:true});
   const anthropic = channel.adapter === 'anthropic';
-  const auth = anthropic ? {'x-api-key':channel.apiKey,'anthropic-version':'2023-06-01'} : {Authorization:'Bearer '+channel.apiKey};
+  // 可灵用 AccessKey + SecretKey 现签 JWT；每次请求都重新签名，令牌有效期 30 分钟。
+  const kling = channel.adapter === 'kling';
+  const auth = anthropic ? {'x-api-key':channel.apiKey,'anthropic-version':'2023-06-01'} : {Authorization:'Bearer '+(kling ? klingJwt(channel.apiKey) : channel.apiKey)};
   let response;
   try { response=await transport(url.href, {method,headers:{...auth,Accept:'application/json',...(body===undefined || body instanceof FormData ? {} : {'Content-Type':'application/json'}),...headers},body:body===undefined?undefined:body instanceof FormData?body:JSON.stringify(body),redirect:'manual',signal:AbortSignal.timeout(timeoutMs),providerLocal:true}); }
   catch(error) {
@@ -40,8 +43,15 @@ export async function requestJson(transport, channel, path, {method='GET', body,
     throw failure;
   }
   if (!response.ok) {
-    await response.body?.cancel();
-    const failure=new AppError(response.status>=500?'PROVIDER_TRANSPORT_UNKNOWN':'PROVIDER_REJECTED','供应商请求未成功，请检查渠道或供应商状态。',502);
+    // 供应商的错误码与说明是排查的主要依据；文本里的 URL（含签名链接）一律替换掉，不进日志也不回给浏览器。
+    let detail='';
+    try {
+      const raw=JSON.parse((await boundedBytes(response,64*1024)).toString('utf8'));
+      const code=String(raw?.code||raw?.error?.code||'').trim().slice(0,60);
+      const message=String(raw?.message||raw?.error?.message||'').replace(/https?:\/\/\S+/g,'[链接]').replace(/\s+/g,' ').trim().slice(0,200);
+      detail=[/^[\w.-]+$/.test(code)?code:'',message].filter(Boolean).join('：');
+    } catch { try { await response.body?.cancel(); } catch {} }
+    const failure=new AppError(response.status>=500?'PROVIDER_TRANSPORT_UNKNOWN':'PROVIDER_REJECTED',`供应商请求未成功${detail ? `（${detail}）` : `（HTTP ${response.status}）`}。`,502);
     failure.upstreamStatus=response.status;
     throw failure;
   }
@@ -61,9 +71,17 @@ export async function discoverModels(transport, channel) {
   }
   throw new AppError('CATALOG_LIMIT','模型目录页数超过限制，保留原配置。',502);
 }
+// 供应商的结果地址可能带 http 前缀（DashScope 的异步结果就是 http://dashscope-result-*.oss-*.aliyuncs.com）。
+// 平台不允许明文下载，统一升级成 https 再取；域名本身不支持 HTTPS 时按下载失败处理，不退化成 http。
+function httpsResultUrl(value) {
+  let url;
+  try { url = new URL(String(value)); } catch { throw new AppError('PROVIDER_URL_BLOCKED','供应商地址无效。',422); }
+  if (url.protocol === 'http:') url.protocol = 'https:';
+  return validateUrl(url.href);
+}
 export async function downloadMedia(transport,url,kind) {
   for(let hops=0;hops<=3;hops++) {
-    const target=validateUrl(url);
+    const target=httpsResultUrl(url);
     let response;
     try { response=await transport(target.href,{redirect:'manual',signal:AbortSignal.timeout(120000)}); } catch { throw new AppError('RESULT_DOWNLOAD_FAILED','结果下载失败，请恢复原任务。',502); }
     if([301,302,303,307,308].includes(response.status)) {const location=response.headers.get('location');await response.body?.cancel();if(!location)break;url=new URL(location,target).href;continue;}

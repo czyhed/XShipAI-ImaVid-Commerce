@@ -4,7 +4,7 @@ import { AppError } from './errors.mjs';
 const protectedFields = ['id','workspaceId','kind','revision','trashedAt','createdAt','updatedAt'];
 const dataOnly = value => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !protectedFields.includes(key)));
 const row = r => r && ({ ...dataOnly(r.body), id:r.id, workspaceId:r.workspace_id, kind:r.kind, revision:r.revision, trashedAt:r.trashed_at, createdAt:r.created_at, updatedAt:r.updated_at });
-const referenceFields=new Set(['productId','sourceAssetId','assetId','sourceRunId','runId','evidenceIds','creativeAssetIds','sourceRunIds','maskAssetId','baseAssetId']);
+const referenceFields=new Set(['productId','sourceAssetId','assetId','sourceRunId','runId','evidenceIds','creativeAssetIds','sourceRunIds','maskAssetId','baseAssetId','presenterAssetId']);
 function references(value,key='',result=new Set()) {
  if(referenceFields.has(key))for(const id of Array.isArray(value)?value:[value])if(typeof id==='string'&&/^[a-f0-9-]{36}$/i.test(id))result.add(id);
  if(value&&typeof value==='object')for(const [field,child] of Object.entries(value))references(child,field,result);

@@ -74,8 +74,9 @@
 .vs-slot-head strong{font-size:12px}
 .vs-slot-head small{color:var(--v3-mute);font-size:11px}
 .vs-slot .vn-cards{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
-.vs-shot-preview{width:100%;aspect-ratio:16/9;border-radius:9px;border:1px solid var(--v3-line-soft);background:var(--v3-panel);object-fit:cover;display:block}
-.vs-shot-preview.empty{display:grid;place-items:center;color:var(--v3-mute);font-size:11px}
+/* 视频按自身比例完整显示（contain），竖屏视频不再被 16:9 框裁掉头和脚。 */
+.vs-shot-preview{width:100%;height:auto;max-height:440px;border-radius:9px;border:1px solid var(--v3-line-soft);background:#11161c;object-fit:contain;display:block}
+.vs-shot-preview.empty{aspect-ratio:16/9;background:var(--v3-panel);display:grid;place-items:center;color:var(--v3-mute);font-size:11px}
 .vs-shot-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 
 /* 侧边抽屉：停靠在编辑区右侧 */
@@ -148,3 +149,8 @@
  .vs-shot-head strong{max-width:100%;flex:1 1 40%}
  .vs-picker,.vs-player{width:100%}
 }
+
+/* 配音完成后的下一步引导：提示到右侧预览区生成本镜，并提供定位按钮。 */
+.vs-next-step{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0 0;padding:8px 10px;border:1px solid #BBD0FF;border-radius:8px;background:var(--v3-accent-soft);color:#2C48C4;font-size:12px;line-height:1.6}
+.vs-next-step span{flex:1;min-width:220px}
+.vs-prompt-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:-4px 0 8px}

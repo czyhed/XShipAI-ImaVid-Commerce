@@ -3,6 +3,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { AppError } from './errors.mjs';
 import { VOLC_BASE_URL, VOLC_RESOURCES } from '../shared/creation-voice.mjs';
+import { KLING_BASE_URL, packKlingSecret } from './providers/kling-auth.mjs';
+import { ALIYUN_LIPSYNC_BASE_URL } from './providers/creation-aliyun-lipsync.mjs';
+import { packAliyunSecret, unpackAliyunSecret, mergeOss } from './providers/oss-transfer.mjs';
 
 const ALGORITHM = 'aes-256-gcm';
 const CHANNEL_ID = /^ch_[0-9a-f]{16}$/;
@@ -10,6 +13,10 @@ const CHANNEL_ID = /^ch_[0-9a-f]{16}$/;
 export function normalizeBaseUrl(value, adapter = 'openai-compatible') {
   // 火山引擎语音渠道的地址固定，不接受自定义地址，避免密钥被发往别处。
   if (adapter === 'volcengine-tts') return VOLC_BASE_URL;
+  // 可灵地址同样固定（北京节点），避免 AccessKey/SecretKey 签名的令牌被发往别处。
+  if (adapter === 'kling') return KLING_BASE_URL;
+  // 阿里云百炼 VideoRetalk 同样固定北京区域地址。
+  if (adapter === 'aliyun-lipsync') return ALIYUN_LIPSYNC_BASE_URL;
   let url;
   try { url = new URL(String(value || '').trim()); }
   catch { throw new AppError('INVALID_BASE_URL', 'Base URL 格式不正确，请填写完整的 https 地址。', 422); }
@@ -41,6 +48,17 @@ export function validateApiKey(value) {
     throw new AppError('INVALID_API_KEY', 'API Key 格式不正确。', 422);
   }
   return key;
+}
+
+// 可灵渠道需要 AccessKey + SecretKey，合成一个加密保存的字符串；其他协议沿用单个 API Key。
+export function channelSecret(adapter, body = {}, { required = true } = {}) {
+  if (adapter === 'kling') {
+    const has = body.accessKey || body.secretKey;
+    if (!has && !required) return undefined;
+    return packKlingSecret(body.accessKey, body.secretKey);
+  }
+  if (body.apiKey === undefined && !required) return undefined;
+  return validateApiKey(body.apiKey);
 }
 
 export function newChannelId() {
@@ -94,6 +112,17 @@ export function decryptSecret(key, row) {
   }
 }
 
+// 列表里的末四位提示：阿里云渠道保存的可能是含 OSS 的 JSON，提示取自真正的 Key。
+function hintOf(adapter, stored) {
+  const key = adapter === 'aliyun-lipsync' ? unpackAliyunSecret(stored).apiKey : stored;
+  return '••••' + String(key || '').slice(-4);
+}
+// 对外只暴露 OSS 的非敏感信息，让再次编辑时能显示「已配置」，不需要重新输入密钥。
+function ossMeta(config, oss) {
+  const { oss: _previous, ...rest } = config && typeof config === 'object' ? config : {};
+  return oss ? { ...rest, oss: { bucket: oss.bucket, region: oss.region, keyHint: '••••' + oss.accessKeyId.slice(-4) } } : rest;
+}
+
 export class ChannelStore {
   constructor(pool, encryptionKey) {
     this.pool = pool;
@@ -141,12 +170,15 @@ export class ChannelStore {
   }
 
   secretRow(row) {
-    return {
-      ...this.publicRow(row),
-      apiKey: decryptSecret(this.encryptionKey, {
-        ciphertext: row.key_ciphertext, iv: row.key_iv, tag: row.key_tag,
-      }),
-    };
+    const stored = decryptSecret(this.encryptionKey, {
+      ciphertext: row.key_ciphertext, iv: row.key_iv, tag: row.key_tag,
+    });
+    // 阿里云对口型渠道可能把 OSS 中转配置和 Key 一起加密保存。
+    if (row.adapter === 'aliyun-lipsync') {
+      const { apiKey, oss } = unpackAliyunSecret(stored);
+      return { ...this.publicRow(row), apiKey, oss };
+    }
+    return { ...this.publicRow(row), apiKey: stored };
   }
 
   async list(client=this.pool) {
@@ -173,10 +205,11 @@ export class ChannelStore {
     validateProtocol(adapter, executorConfig);
     const normalizedBaseUrl = normalizeBaseUrl(baseUrl, adapter);
     const secret = encryptSecret(this.encryptionKey, apiKey);
+    const storedConfig = adapter === 'aliyun-lipsync' ? ossMeta(executorConfig, unpackAliyunSecret(apiKey).oss) : executorConfig;
     const result = await this.pool.query(`
       INSERT INTO sj_model_channels (id,name,base_url,key_ciphertext,key_iv,key_tag,key_hint,adapter,executor_config)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *
-    `, [id, name, normalizedBaseUrl, secret.ciphertext, secret.iv, secret.tag, '••••' + apiKey.slice(-4),adapter,JSON.stringify(executorConfig)]);
+    `, [id, name, normalizedBaseUrl, secret.ciphertext, secret.iv, secret.tag, hintOf(adapter, apiKey),adapter,JSON.stringify(storedConfig)]);
     return this.publicRow(result.rows[0]);
   }
 
@@ -188,9 +221,19 @@ export class ChannelStore {
     if(patch.enabled!==undefined&&typeof patch.enabled!=='boolean')throw new AppError('INVALID_CHANNEL','启用状态需为布尔值。',422);
     const name=validateChannelName(patch.name??current.name);
     const baseUrl=normalizeBaseUrl(patch.baseUrl??current.baseUrl,adapter);
-    const apiKey=patch.apiKey===undefined?current.apiKey:validateApiKey(patch.apiKey);
+    // 阿里云渠道：Key 与可选的 OSS 中转配置一起加密保存；只改其中几项时，留空的字段沿用已保存的值。
+    let apiKey, oss = null;
+    if (adapter === 'aliyun-lipsync') {
+      const key = patch.apiKey === undefined ? current.apiKey : validateApiKey(patch.apiKey);
+      oss = mergeOss(current.adapter === 'aliyun-lipsync' ? current.oss : null, patch.oss);
+      if (!key) throw new AppError('INVALID_API_KEY', '请填写百炼 API Key。', 422);
+      apiKey = packAliyunSecret(key, oss);
+    } else {
+      apiKey = patch.apiKey === undefined ? current.apiKey : validateApiKey(patch.apiKey);
+    }
+    const storedConfig = adapter === 'aliyun-lipsync' ? ossMeta(config, oss) : config;
     const secret=encryptSecret(this.encryptionKey,apiKey);
-    const result=await this.pool.query(`UPDATE sj_model_channels SET name=$2,adapter=$3,base_url=$4,key_ciphertext=$5,key_iv=$6,key_tag=$7,key_hint=$8,executor_config=$9,enabled=$10,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *`,[id,name,adapter,baseUrl,secret.ciphertext,secret.iv,secret.tag,'••••'+apiKey.slice(-4),JSON.stringify(config),patch.enabled??current.enabled]);
+    const result=await this.pool.query(`UPDATE sj_model_channels SET name=$2,adapter=$3,base_url=$4,key_ciphertext=$5,key_iv=$6,key_tag=$7,key_hint=$8,executor_config=$9,enabled=$10,revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *`,[id,name,adapter,baseUrl,secret.ciphertext,secret.iv,secret.tag,hintOf(adapter,apiKey),JSON.stringify(storedConfig),patch.enabled??current.enabled]);
     return this.publicRow(result.rows[0]);
   }
   async setEnabled(id, enabled) {
@@ -210,7 +253,16 @@ export class ChannelStore {
 }
 
 export function validateProtocol(adapter, config = {}) {
-  if(!['openai-compatible','anthropic','minimax-h3','volcengine-tts'].includes(adapter)) throw new AppError('INVALID_PROTOCOL','请选择 OpenAI、Anthropic、MiniMax H3 或火山引擎语音协议。',422);
+  if(!['openai-compatible','anthropic','minimax-h3','volcengine-tts','kling','aliyun-lipsync'].includes(adapter)) throw new AppError('INVALID_PROTOCOL','请选择 OpenAI、Anthropic、MiniMax H3、火山引擎语音、可灵或阿里云对口型协议。',422);
+  if(adapter==='aliyun-lipsync'){
+    // 额外允许 oss：只放 Bucket、地域与 AccessKey 末四位这类展示信息，真正的密钥在加密字段里。
+    if(!config || typeof config!=='object' || Array.isArray(config) || Object.keys(config).some(k=>k!=='oss')) throw new AppError('INVALID_EXECUTOR','对口型渠道不需要执行器配置。',422);
+    return config;
+  }
+  if(adapter==='kling'){
+    if(!config || typeof config!=='object' || Array.isArray(config) || Object.keys(config).length) throw new AppError('INVALID_EXECUTOR','对口型渠道不需要执行器配置。',422);
+    return config;
+  }
   if(adapter==='volcengine-tts'){
     if(!config || typeof config!=='object' || Array.isArray(config) || Object.keys(config).some(k=>k!=='resourceId')) throw new AppError('INVALID_EXECUTOR','火山引擎语音渠道只能配置资源 ID。',422);
     if(config.resourceId!==undefined&&!VOLC_RESOURCES.includes(config.resourceId)) throw new AppError('INVALID_EXECUTOR','资源 ID 需为 seed-tts-2.0 或 seed-icl-2.0。',422);

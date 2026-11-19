@@ -12,6 +12,7 @@ import { CreationVoice, dubState, dialogueAudioStatus, dubSuggestion } from './c
 import { validateVoiceRoles, MAX_VOICE_ROLES } from '../shared/creation-voice.mjs';
 import { checkVideoSettings, normalizeVideoSettings, effectiveVideoParams, SETTING_DEFAULTS } from '../shared/creation-video-settings.mjs';
 import { SHOT_PLANNING_SYSTEM, MAX_PLAN_MATERIALS, materialsForModel, sanitizeShotPlan, previewShot } from './video-shot-plan.mjs';
+import { PRESENTER_STYLES, PRESENTER_STYLE_LABEL, PRESENTER_SOURCES, PRESENTER_DEFAULT_ROLE, PRESENTER_DEFAULT_SPEAKER, PRESENTER_DIALOGUE_SYSTEM, checkPresenterInput, buildPresenterPrompt, presenterImagePrompt, sanitizePresenterLine, presenterHoldPrompt, HOLD_PROMPT_KEYS, PRESENTER_DEFAULT_DURATION, PRESENTER_MIN_DURATION, PRESENTER_MAX_DURATION, PRESENTER_MAX_PRODUCT_IMAGES } from '../shared/creation-presenter.mjs';
 const fail=(code,message,status=400)=>{throw new AppError(code,message,status);};
 // 配音合成标记：写入节点，页面重进后也能看到「正在合成」；超过 15 分钟视为残留（服务重启 / 中断）。
 const DUB_PENDING_MS=15*60*1000;
@@ -118,6 +119,9 @@ function graph(tasks,edges) {
   if(t.tailFrame!==undefined&&t.tailFrame!==null&&!validTailFrame(t.tailFrame)) fail('TASK_INVALID','上一镜尾帧需要包含来源分镜节点，截取后附带结果版本与素材。');
   if(t.dubMode!==undefined&&t.dubMode!==null&&t.dubMode!==''&&!DUB_MODES.includes(t.dubMode)) fail('TASK_INVALID','配音方式需为后期配音、口型同步或不配音。');
   if(t.subtitles!==undefined&&t.subtitles!==null&&typeof t.subtitles!=='boolean') fail('TASK_INVALID','「本镜显示字幕」需为开或关。');
+  if(t.presenterAssetId!==undefined&&t.presenterAssetId!==null&&(typeof t.presenterAssetId!=='string'||!uuid.test(t.presenterAssetId))) fail('TASK_INVALID','人物参考图编号无效。');
+  if(t.presenterSource!==undefined&&t.presenterSource!==null&&!PRESENTER_SOURCES.includes(t.presenterSource)) fail('TASK_INVALID','人物来源需为上传或 AI 生成。');
+  if(t.presenterStyle!==undefined&&t.presenterStyle!==null&&!PRESENTER_STYLES.includes(t.presenterStyle)) fail('TASK_INVALID','人物口播展示方式无效。');
   if(t.dialogue!==undefined&&t.dialogue!==null&&(!Array.isArray(t.dialogue)||t.dialogue.length>50||t.dialogue.some(d=>!d||typeof d.text!=='string'||d.text.length>2000||!DIALOGUE_LANGUAGES.includes(d.language)||(d.roleId!==undefined&&d.roleId!==null&&(typeof d.roleId!=='string'||!/^[\w-]{1,100}$/.test(d.roleId)))))) fail('TASK_INVALID','台词需为文本、语言（中文或英文）和角色的列表。');
   if(!NODE_KINDS.has(kind(t))||!['product','concept'].includes(t.subject||'concept')||typeof (t.prompt??'')!=='string'||(t.prompt??'').length>20000||typeof t.title!=='string'||!t.title.trim()||t.title.length>200||!t.params||Array.isArray(t.params)||typeof t.params!=='object'||!finite(t.position?.x)||!finite(t.position?.y)) fail('TASK_INVALID','检查节点类型、标题、提示词、参数与位置。');
  }
@@ -334,6 +338,7 @@ export class CreationProjects {
    }
    const resolved=this.resolveInputs(task,project,runs);
    const legacy=isLegacyGraph(project);
+   const snapshotForPrompt=task.productSnapshot||(task.subject==='concept'?null:project.productSnapshot);
    const matching=history.filter(r=>r.status==='succeeded').findLast(r=>inputFingerprint(r.input.task,r.input.edges)===inputFingerprint(task,project.edges)&&(legacy||(r.input.prompt===resolved.prompt&&hash(r.input.images||[])===hash(resolved.images)&&(kind!=='video'||resolved.media===undefined||(hash(mediaKey(r.input))===hash(resolved.media.map(m=>[m.assetId,m.role]))&&modeOf(r.input)===resolved.videoMode)))));
    const reuseAction=Boolean(matching)&&!regenerate.has(taskId)&&last?.status!=='failed';
    if(legacy&&task.sourceRunId&&!reuseAction&&!(last&&active.has(last.status))){
@@ -370,7 +375,7 @@ export class CreationProjects {
     try {
      await this.validateReferences(workspace,{...project,tasks:[task]},client);
      model=await this.hub.resolve(kind==='video'?'video':'image',task.model||undefined,client);
-     await this.hub.validateGeneration?.({...task,kind:kind==='video'?'video':'image',model,prompt:generationPrompt({...task,prompt:resolved.prompt,productSnapshot:task.productSnapshot||project.productSnapshot}),...(resolved.media?{media:resolved.media,videoMode:resolved.videoMode}:{})},client,{parametersOnly:true});
+     await this.hub.validateGeneration?.({...task,kind:kind==='video'?'video':'image',model,prompt:generationPrompt({...task,prompt:resolved.prompt,productSnapshot:snapshotForPrompt}),...(resolved.media?{media:resolved.media,videoMode:resolved.videoMode}:{})},client,{parametersOnly:true});
     }catch(e){action='blocked';reason=e instanceof AppError?e.message:'请先配置可用的环节默认模型。';}
    }
    const entry={taskId,title:task.title,kind,action,reason,model,reuseRunId,resolved,inputHash:inputFingerprint(task,project.edges)};
@@ -452,7 +457,7 @@ export class CreationProjects {
  }
  // 单个任务：冻结输入并插入运行记录（start 与批次派发共用）；校验已由调用方的预览完成。
  async insertRun(client,workspace,project,task,entry,{start,requestKey}) {
-  const input={kind:nodeKind(task,isLegacyGraph(project))==='video'?'video':'image',nodeKind:nodeKind(task,isLegacyGraph(project)),task:clone(task),prompt:entry.resolved.prompt,params:task.kind==='video'?normalizeVideoParameters(task.params):clone(task.params),model:clone(entry.model),productId:project.productId,productSnapshot:clone(task.productSnapshot||project.productSnapshot),sourceAssetId:entry.resolved.sourceAssetId,sourceRunId:entry.resolved.sourceRunId,maskAssetId:entry.resolved.maskAssetId||null,images:clone(entry.resolved.images),graphRevision:project.revision,edges:clone(project.edges),requestKey,start};
+  const input={kind:nodeKind(task,isLegacyGraph(project))==='video'?'video':'image',nodeKind:nodeKind(task,isLegacyGraph(project)),task:clone(task),prompt:entry.resolved.prompt,params:task.kind==='video'?normalizeVideoParameters(task.params):clone(task.params),model:clone(entry.model),productId:project.productId,productSnapshot:clone(task.productSnapshot||(task.subject==='concept'?null:project.productSnapshot)),sourceAssetId:entry.resolved.sourceAssetId,sourceRunId:entry.resolved.sourceRunId,maskAssetId:entry.resolved.maskAssetId||null,images:clone(entry.resolved.images),graphRevision:project.revision,edges:clone(project.edges),requestKey,start};
   // 视频节点：冻结素材清单、方式与台词；换算后的提示词已在 input.prompt。
   if(input.kind==='video'&&entry.resolved.media) Object.assign(input,{media:clone(entry.resolved.media),videoMode:entry.resolved.videoMode,dubMode:entry.resolved.dubMode,dialogue:clone(entry.resolved.dialogue),...(entry.resolved.dialogueAudio?{dialogueAudio:clone(entry.resolved.dialogueAudio)}:{})});
   const runId=randomUUID();
@@ -629,7 +634,7 @@ export class CreationProjects {
     mixAfter=run.input.kind==='video'&&run.input.dubMode==='post'&&Boolean(run.input.dialogueAudio?.assetId);
     let asset=(await client.query("SELECT id FROM sj_creation_records WHERE workspace_id=$1 AND kind='asset' AND body->>'runId'=$2 ORDER BY created_at LIMIT 1",[run.workspace_id,id])).rows[0];
     if(!asset&&result.bytes&&result.mime) {
-     try {asset=await this.media.put(run.workspace_id,{bytes:Buffer.from(result.bytes),mime:result.mime,name:`${run.input.task.title}-${id.slice(0,8)}.${result.mime==='video/mp4'?'mp4':result.mime==='image/jpeg'?'jpg':result.mime==='image/webp'?'webp':'png'}`,productId:run.input.productId,projectId:run.project_id,taskId:run.task_id,runId:id,role:'result'},client);}catch(e) {logDiagnostic('poll-error',id,e);}
+     try {asset=await this.media.put(run.workspace_id,{bytes:Buffer.from(result.bytes),mime:result.mime,name:`${run.input.task.title}-${id.slice(0,8)}.${result.mime==='video/mp4'?'mp4':result.mime==='image/jpeg'?'jpg':result.mime==='image/webp'?'webp':'png'}`,productId:run.input.productId,projectId:run.project_id,taskId:run.task_id,runId:id,role:'result',...(run.input.task?.presenterPortrait?{derivedFrom:{kind:'presenter-portrait'}}:run.input.task?.presenterHeld?{derivedFrom:{kind:'presenter-held'}}:{})},client);}catch(e) {logDiagnostic('poll-error',id,e);}
     }
     if(asset) output={assetId:asset.id,mime:result.mime||run.output?.mime,fileUrl:`/api/creation/assets/${asset.id}/file`};
     else if(cancelAttempt)status='cancelled';
@@ -969,6 +974,7 @@ export class CreationProjects {
   return this.detail(workspace,id);
  }
  // AI 生成分镜台词：只调用文本模型写台词，不合成配音、不改已有 dialogueAudio；全片或指定分镜。
+ // 人物口播任务用第一人称提示词；普通分镜继续用第三人称旁白。两组合并写入，避免一次按钮产生两种叙事。
  async generateDialogue(workspace,id,body={}) {
   const {project}=await this.detail(workspace,id);this.assertProject(project);
   if(body.taskIds!==undefined&&!Array.isArray(body.taskIds))fail('TASK_INVALID','请选择要重写台词的分镜。',422);
@@ -977,45 +983,269 @@ export class CreationProjects {
    const task=project.tasks.find(t=>t.id===taskId),shot=sb.shots.find(s=>s.nodeId===taskId)||null;
    if(!task||task.kind!=='video')fail('TASK_INVALID','只能为项目里的视频分镜生成台词。',422);
    const duration=effectiveVideoParams(sb.settings,task.params).duration;
-   return {taskId,title:shot?.title||task.title,description:shot?.description||'',prompt:task.prompt||'',duration:Number.isInteger(duration)?duration:SETTING_DEFAULTS.duration};
+   return {taskId,title:shot?.title||task.title,description:shot?.description||'',prompt:task.prompt||'',duration:Number.isInteger(duration)?duration:SETTING_DEFAULTS.duration,presenter:Boolean(task.presenterAssetId)};
   };
   const requested=[...new Set(Array.isArray(body.taskIds)?body.taskIds:[])];
   const inputs=requested.length?requested.map(targetOf):sb.shots.filter(shot=>shot.nodeId&&project.tasks.some(task=>task.id===shot.nodeId&&task.kind==='video')).map(shot=>targetOf(shot.nodeId));
   if(!inputs.length)fail('TASK_INVALID','请先在视频工作台添加分镜。',422);
-  const response=await this.hub.complete({workspaceId:workspace,stage:'planning',messages:[{role:'user',content:JSON.stringify({task:'video-dialogue',script:sb.script,product:project.productSnapshot,shots:inputs})}],system:DIALOGUE_PLANNING_SYSTEM});
-  let parsed=null;
-  try {parsed=JSON.parse(String(response.text||'').trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,''));}catch{/* 非 JSON 视作无有效台词 */}
   const limits=new Map(inputs.map(item=>[item.taskId,Math.min(200,item.duration*4)])),picked=new Map();
-  for(const line of Array.isArray(parsed?.lines)?parsed.lines:[]){
-   const taskId=typeof line?.taskId==='string'?line.taskId:'';
-   if(!limits.has(taskId)||picked.has(taskId))continue;
-   const text=String(line?.text??'').replace(/\s+/g,' ').trim();
-   if(!text)continue;
-   const cleaned=[...text].slice(0,limits.get(taskId)).join('').trim();
-   if(cleaned)picked.set(taskId,cleaned);
+  const groups=[
+   {inputs:inputs.filter(item=>item.presenter),system:PRESENTER_DIALOGUE_SYSTEM,task:'video-presenter-dialogue'},
+   {inputs:inputs.filter(item=>!item.presenter),system:DIALOGUE_PLANNING_SYSTEM,task:'video-dialogue'},
+  ].filter(group=>group.inputs.length);
+  for(const group of groups){
+   let parsed=null;
+   try{
+    const response=await this.hub.complete({workspaceId:workspace,stage:'planning',messages:[{role:'user',content:JSON.stringify({task:group.task,script:sb.script,product:project.productSnapshot,shots:group.inputs})}],system:group.system});
+    parsed=JSON.parse(String(response.text||'').trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,''));
+   }catch{/* 某一组失败不影响另一组已有结果 */}
+   const allowed=new Set(group.inputs.map(item=>item.taskId));
+   const lines=Array.isArray(parsed?.lines)?parsed.lines:typeof parsed?.text==='string'&&group.inputs.length===1?[{taskId:group.inputs[0].taskId,text:parsed.text}]:[];
+   for(const line of lines){
+    const taskId=typeof line?.taskId==='string'?line.taskId:'';
+    if(!allowed.has(taskId)||!limits.has(taskId)||picked.has(taskId))continue;
+    const info=group.inputs.find(item=>item.taskId===taskId);
+    const cleaned=info.presenter?sanitizePresenterLine(line?.text,info.duration):(()=>{
+     const text=String(line?.text??'').replace(/\s+/g,' ').trim();
+     return text?[...text].slice(0,limits.get(taskId)).join('').trim():'';
+    })();
+    if(cleaned)picked.set(taskId,{text:cleaned,presenter:info.presenter});
+   }
   }
   if(!picked.size)fail('DIALOGUE_GENERATION_FAILED','台词生成失败或返回内容无效，请重试。',502);
-  // 角色与台词按最新项目写入，避免覆盖并发的画布编辑；没有「旁白」时自动创建。
+  // 角色与台词按最新项目写入，避免覆盖并发的画布编辑；按需创建「主播」或「旁白」。
   await this.store.change(workspace,id,null,current=>{
    this.assertProject(current);
    const roles=Array.isArray(current.voiceRoles)?current.voiceRoles:[];
-   let narrator=roles.find(role=>typeof role?.name==='string'&&role.name.trim()==='旁白'),voiceRoles=roles;
-   if(!narrator){
-    if(roles.length>=MAX_VOICE_ROLES)fail('VOICE_ROLES_INVALID',`角色最多 ${MAX_VOICE_ROLES} 个，请先删除不用的角色再生成旁白。`,422);
-    narrator={id:randomUUID(),name:'旁白',source:'system',speaker:'zh_female_xiaohe_uranus_bigtts',resourceId:'seed-tts-2.0',speechRate:0,emotion:'',emotionScale:4,loudnessRate:0,contextText:''};
-    voiceRoles=[...roles,narrator];
-   }
+   let voiceRoles=roles;
+   const roleFor=name=>{
+    let role=voiceRoles.find(item=>typeof item?.name==='string'&&item.name.trim()===name);
+    if(role)return role;
+    if(voiceRoles.length>=MAX_VOICE_ROLES)fail('VOICE_ROLES_INVALID',`角色最多 ${MAX_VOICE_ROLES} 个，请先删除不用的角色再生成台词。`,422);
+    role={id:randomUUID(),name,source:'system',speaker:name===PRESENTER_DEFAULT_ROLE?PRESENTER_DEFAULT_SPEAKER:'zh_female_xiaohe_uranus_bigtts',resourceId:'seed-tts-2.0',speechRate:0,emotion:'',emotionScale:4,loudnessRate:0,contextText:''};
+    voiceRoles=[...voiceRoles,role];
+    return role;
+   };
    let changed=0;
    const tasks=current.tasks.map(task=>{
-    const text=picked.get(task.id);
-    if(!text)return task;
+    const hit=picked.get(task.id);
+    if(!hit)return task;
     changed+=1;
-    return {...task,dialogue:[{text,language:'zh',roleId:narrator.id}],dubMode:'post'};
+    const role=roleFor(hit.presenter?PRESENTER_DEFAULT_ROLE:'旁白');
+    // 口播任务保留用户选的口型同步 / 后期配音；普通分镜沿用后期旁白。
+    const dubMode=hit.presenter&&['post','lipsync'].includes(task.dubMode)?task.dubMode:'post';
+    return {...task,dialogue:[{text:hit.text,language:'zh',roleId:role.id}],dubMode};
    });
    if(!changed)fail('TASK_INVALID','分镜节点已被删除，请刷新后重试。',409);
    return {...current,voiceRoles,tasks};
   });
   return this.detail(workspace,id);
+ }
+ // 人物口播：按人物图 + 1–3 张商品图 + 台词创建一条参考模式视频节点，并追加一个分镜。
+ // 只建节点，不提交生成；费用与模型校验仍由既有预览 / 开始流程负责。
+ async createPresenter(workspace,id,body={}) {
+  const before=await this.detail(workspace,id);this.assertProject(before.project);
+  if(before.project.storyboard&&(before.project.storyboard.shots||[]).length>=30)fail('STORYBOARD_INVALID','分镜最多 30 个。',422);
+  let created=null;
+  await this.store.change(workspace,id,null,async(project,client)=>{
+   this.assertProject(project);
+   const checked=checkPresenterInput(body,{productId:project.productId});
+   if(checked.error)fail('PRESENTER_INVALID',checked.error,422);
+   const spec=checked.input;
+   const hold=Boolean(spec.holdAssetId);
+   // 有持物图时，它同时承担“人物 + 手 + 商品”，作为视频唯一的图片依据。
+   const person=await this.store.get(workspace,hold?spec.holdAssetId:spec.personAssetId,client);
+   if(!person||person.kind!=='asset'||person.deletionPending||person.trashedAt||!person.mime?.startsWith('image/')||!['creative','result'].includes(person.role))fail('PRESENTER_INVALID','人物图片需要是本工作空间的创作图片或生成图片。',422);
+   const productAssets=[];
+   for(const assetId of spec.productAssetIds){
+    const asset=await this.store.get(workspace,assetId,client);
+    const belongs=Boolean(asset)&&(!project.productId||asset.productId===project.productId||asset.projectId===project.id);
+    if(!asset||asset.kind!=='asset'||asset.deletionPending||asset.trashedAt||!asset.mime?.startsWith('image/')||!['creative','result'].includes(asset.role)||!belongs)fail('PRESENTER_INVALID','商品参考图需要是本项目或本商品的创作图片。',422);
+    productAssets.push(asset);
+   }
+   const roles=Array.isArray(project.voiceRoles)?project.voiceRoles:[];
+   let presenterRole=roles.find(role=>typeof role?.name==='string'&&role.name.trim()===PRESENTER_DEFAULT_ROLE),voiceRoles=roles;
+   if(!presenterRole){
+    if(roles.length>=MAX_VOICE_ROLES)fail('VOICE_ROLES_INVALID',`角色最多 ${MAX_VOICE_ROLES} 个，请先删除不用的角色再创建人物口播。`,422);
+    presenterRole={id:randomUUID(),name:PRESENTER_DEFAULT_ROLE,source:'system',speaker:PRESENTER_DEFAULT_SPEAKER,resourceId:'seed-tts-2.0',speechRate:0,emotion:'',emotionScale:4,loudnessRate:0,contextText:''};
+    voiceRoles=[...roles,presenterRole];
+   }
+   const storyboardWorkflow=project.workflows?.find(workflow=>workflow.id==='storyboard')?.id;
+   const workflowId=storyboardWorkflow||project.workflows?.[0]?.id;
+   const videoCount=project.tasks.filter(task=>task.kind==='video').length;
+   const x=80+videoCount*340,y=860;
+   const personNode={id:randomUUID(),...(workflowId?{workflowId}:{}),kind:'image',title:hold?'手拿商品图':'人物参考',prompt:'',params:{},subject:project.productId?'product':'concept',productSnapshot:project.productSnapshot,position:{x,y:y-620},sourceAssetId:person.id,sourceRunId:null,dimension:'视频分镜'};
+   const productNodes=productAssets.map((asset,index)=>({id:randomUUID(),...(workflowId?{workflowId}:{}),kind:'image',title:`商品参考 ${index+1}`,prompt:'',params:{},subject:project.productId?'product':'concept',productSnapshot:project.productSnapshot,position:{x:x+220*(index+1),y:y-620},sourceAssetId:asset.id,sourceRunId:null,dimension:'视频分镜'}));
+   const videoId=randomUUID();
+   const prompt=buildPresenterPrompt({style:spec.style,personTag:`{{ref:${personNode.id}}}`,holdTag:hold?`{{ref:${personNode.id}}}`:'',productTags:productNodes.map(node=>`{{ref:${node.id}}}`),productName:project.productSnapshot?.name||''});
+   // 有持物图：一律首帧模式 + 后期配音 + 比例跟随首帧，锁住构图与脸部大小；
+   // 参考模式会整幅重绘、横屏比例会裁掉头顶。真实口型改由「只改嘴」（阿里云 / 可灵）完成。
+   const framesMode=hold;
+   const dubMode=hold?'post':spec.dubMode;
+   const ratio=hold?'adaptive':spec.ratio;
+   const videoNode={id:videoId,...(workflowId?{workflowId}:{}),kind:'video',title:spec.title,prompt,params:{duration:spec.duration,resolution:spec.resolution,ratio},videoMode:framesMode?'frames':'reference',dialogue:[{text:spec.dialogueText,language:'zh',roleId:presenterRole.id}],dubMode,presenterAssetId:person.id,presenterSource:spec.personSource,presenterStyle:spec.style,subject:project.productId?'product':'concept',productSnapshot:project.productSnapshot,position:{x,y},sourceAssetId:null,sourceRunId:null,dimension:'视频分镜'};
+   const edges=[...(project.edges||[]),{id:randomUUID(),source:personNode.id,sourceHandle:'image',target:videoId,targetHandle:framesMode?'first':'refImage'},...productNodes.map(node=>({id:randomUUID(),source:node.id,sourceHandle:'image',target:videoId,targetHandle:'refImage'}))];
+   const sb=this.normalizeStoryboard(project);
+   if(sb.shots.length>=30)fail('STORYBOARD_INVALID','分镜最多 30 个。',422);
+   const shotId=randomUUID();
+   const shot={id:shotId,title:spec.title,description:`人物口播 · ${PRESENTER_STYLE_LABEL[spec.style]} · ${spec.duration} 秒`,nodeId:videoId};
+   const tasks=[...clone(project.tasks),personNode,...productNodes,videoNode];
+   graph(tasks,edges);
+   await this.validateReferences(workspace,{...project,tasks:[personNode,...productNodes,videoNode],edges},client,project);
+   created={taskId:videoId,shotId,personNodeId:personNode.id,productNodeIds:productNodes.map(node=>node.id)};
+   return {...project,voiceRoles,tasks,edges,storyboard:{...sb,shots:[...sb.shots,shot]}};
+  });
+  return {...await this.detail(workspace,id),created};
+ }
+ // AI 起草人物口播台词：不创建节点、不合成配音；用户在确认弹窗里可以继续改。
+ async presenterScript(workspace,id,body={}) {
+  const {project}=await this.detail(workspace,id);this.assertProject(project);
+  const duration=Number(body.duration??PRESENTER_DEFAULT_DURATION);
+  if(!Number.isInteger(duration)||duration<PRESENTER_MIN_DURATION||duration>PRESENTER_MAX_DURATION)fail('PRESENTER_INVALID',`人物口播时长需为 ${PRESENTER_MIN_DURATION}–${PRESENTER_MAX_DURATION} 的整数秒。`,422);
+  const style=PRESENTER_STYLES.includes(body.style)?body.style:'handheld';
+  const instructions=typeof body.instructions==='string'?body.instructions.trim().slice(0,2000):'';
+  const sb=this.normalizeStoryboard(project);
+  const shot={taskId:'presenter',title:'人物口播',description:instructions,style,duration};
+  const response=await this.hub.complete({workspaceId:workspace,stage:'planning',messages:[{role:'user',content:JSON.stringify({task:'presenter-dialogue',script:sb.script,product:project.productSnapshot,shots:[shot]})}],system:PRESENTER_DIALOGUE_SYSTEM});
+  let parsed=null;
+  try{parsed=JSON.parse(String(response.text||'').trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,''));}catch{/* 非 JSON 按纯文本处理 */}
+  const raw=typeof parsed?.text==='string'?parsed.text:Array.isArray(parsed?.lines)?(parsed.lines.find(line=>line?.taskId==='presenter')||parsed.lines[0])?.text:response.text;
+  const text=sanitizePresenterLine(raw,duration);
+  if(!text)fail('DIALOGUE_GENERATION_FAILED','台词生成失败或返回内容无效，请重试。',502);
+  return {text,duration,style,usage:response.usage||null};
+ }
+ // AI 虚拟人物定妆照：创建一张生图节点并立即提交（费用由既有生图运行记录统计）。
+ // 生图不可用时删除刚建的节点，避免画布留下无法执行的孤儿节点。
+ async presenterImage(workspace,id,body={}) {
+  const description=typeof body.prompt==='string'?body.prompt.trim():'';
+  if(description.length>2000)fail('PRESENTER_INVALID','人物描述不能超过 2000 字。',422);
+  let taskId=null;
+  await this.store.change(workspace,id,null,project=>{
+   this.assertProject(project);
+   const workflowId=project.workflows?.find(workflow=>workflow.id==='storyboard')?.id||project.workflows?.[0]?.id;
+   const count=project.tasks.filter(task=>task.kind==='generate').length;
+   const node={id:randomUUID(),...(workflowId?{workflowId}:{}),kind:'generate',title:'人物定妆',prompt:presenterImagePrompt(description),params:{size:'1024x1024'},subject:'concept',presenterPortrait:true,position:{x:80+(count%4)*340,y:120+Math.floor(count/4)*320},sourceAssetId:null,sourceRunId:null,dimension:'视频分镜'};
+   taskId=node.id;
+   return {...project,tasks:[...project.tasks,node]};
+  });
+  let preview;
+  try{preview=await this.preview(workspace,id,{taskIds:[taskId]});}
+  catch(error){
+   await this.store.change(workspace,id,null,project=>({...project,tasks:project.tasks.filter(task=>task.id!==taskId)}),{keepRevision:true}).catch(()=>{});
+   throw error;
+  }
+  if(!preview.canStart){
+   await this.store.change(workspace,id,null,project=>({...project,tasks:project.tasks.filter(task=>task.id!==taskId)}),{keepRevision:true});
+   const reason=preview.scope.find(entry=>entry.taskId===taskId&&entry.reason)?.reason||'人物图暂时不能生成，请检查生图模型配置。';
+   fail('PRESENTER_IMAGE_BLOCKED',reason,422);
+  }
+  const data=await this.start(workspace,id,{taskIds:[taskId],previewToken:preview.previewToken,requestKey:randomUUID()});
+  const run=data.runs.filter(run=>run.taskId===taskId).at(-1)||null;
+  return {...data,created:{taskId,runId:run?.id||null}};
+ }
+ // 手拿商品图：人物图（第 1 张）+ 1–3 张商品图 → 改图节点，立即提交；提示词由 holdPrompt 选项 + 补充说明在服务端拼装。
+ // 每次调用生成一个候选；用户在弹窗里挑一张确认后再创建口播分镜。
+ async presenterHeldImage(workspace,id,body={}) {
+  const holdPrompt=typeof body.holdPrompt==='string'?body.holdPrompt:'chest';
+  if(!HOLD_PROMPT_KEYS.includes(holdPrompt))fail('PRESENTER_INVALID','持物方式无效。',422);
+  const extra=typeof body.extra==='string'?body.extra.trim():'';
+  if(extra.length>500)fail('PRESENTER_INVALID','补充说明不能超过 500 字。',422);
+  if(holdPrompt==='custom'&&!extra)fail('PRESENTER_INVALID','选择自定义时请填写补充说明。',422);
+  const personAssetId=typeof body.personAssetId==='string'?body.personAssetId.trim():'';
+  const rawIds=Array.isArray(body.productAssetIds)?body.productAssetIds:[];
+  if(!personAssetId||!rawIds.length||rawIds.some(item=>typeof item!=='string'))fail('PRESENTER_INVALID','请先选择人物图和至少一张商品参考图。',422);
+  const productAssetIds=[...new Set(rawIds.map(item=>item.trim()))];
+  if(productAssetIds.length>PRESENTER_MAX_PRODUCT_IMAGES)fail('PRESENTER_INVALID',`商品参考图最多 ${PRESENTER_MAX_PRODUCT_IMAGES} 张。`,422);
+  let taskId=null;
+  await this.store.change(workspace,id,null,async(project,client)=>{
+   this.assertProject(project);
+   const load=async assetId=>{
+    const asset=await this.store.get(workspace,assetId,client);
+    const belongs=Boolean(asset)&&(!project.productId||asset.productId===project.productId||asset.projectId===project.id);
+    if(!asset||asset.kind!=='asset'||asset.deletionPending||asset.trashedAt||!asset.mime?.startsWith('image/')||!['creative','result'].includes(asset.role)||!belongs)fail('PRESENTER_INVALID','人物图与商品图需要是本项目或本商品的图片。',422);
+    return asset;
+   };
+   const person=await load(personAssetId);
+   const products=[];for(const assetId of productAssetIds)products.push(await load(assetId));
+   const workflowId=project.workflows?.find(workflow=>workflow.id==='storyboard')?.id||project.workflows?.[0]?.id;
+   const count=project.tasks.filter(task=>['generate','edit'].includes(task.kind)).length;
+   const base=y=>({...(workflowId?{workflowId}:{}),subject:project.productId?'product':'concept',productSnapshot:project.productSnapshot,dimension:'视频分镜',position:y});
+   const imageNode=(title,asset,x)=>({id:randomUUID(),kind:'image',title,prompt:'',params:{},sourceAssetId:asset.id,sourceRunId:null,...base({x,y:-200})});
+   const personNode=imageNode('人物（持物图输入）',person,80);
+   const productNodes=products.map((asset,index)=>imageNode(`商品（持物图输入 ${index+1}）`,asset,300+index*220));
+   const editNode={id:randomUUID(),kind:'edit',title:'手拿商品图',prompt:presenterHoldPrompt(holdPrompt,extra),params:{size:'1024x1536'},sourceAssetId:person.id,sourceRunId:null,presenterHeld:true,...base({x:80+(count%4)*340,y:120+Math.floor(count/4)*320})};
+   taskId=editNode.id;
+   const link=node=>({id:randomUUID(),source:node.id,sourceHandle:'image',target:editNode.id,targetHandle:'image'});
+   const tasks=[...clone(project.tasks),personNode,...productNodes,editNode];
+   const edges=[...(project.edges||[]),link(personNode),...productNodes.map(link)];
+   graph(tasks,edges);
+   return {...project,tasks,edges};
+  });
+  let preview;
+  const rollback=()=>this.store.change(workspace,id,null,project=>({...project,tasks:project.tasks.filter(task=>task.id!==taskId&&!(task.kind==='image'&&(project.edges||[]).some(edge=>edge.source===task.id&&edge.target===taskId))),edges:(project.edges||[]).filter(edge=>edge.target!==taskId)}),{keepRevision:true}).catch(()=>{});
+  try{preview=await this.preview(workspace,id,{taskIds:[taskId]});}
+  catch(error){await rollback();throw error;}
+  if(!preview.canStart){
+   await rollback();
+   const reason=preview.scope.find(entry=>entry.taskId===taskId&&entry.reason)?.reason||'手拿商品图暂时不能生成，请检查改图模型配置。';
+   fail('PRESENTER_IMAGE_BLOCKED',reason,422);
+  }
+  const data=await this.start(workspace,id,{taskIds:[taskId],previewToken:preview.previewToken,requestKey:randomUUID()});
+  const run=data.runs.filter(run=>run.taskId===taskId).at(-1)||null;
+  return {...data,created:{taskId,runId:run?.id||null}};
+ }
+ // 只改嘴：用已有成功底片 + 已合成配音，提交可灵对口型；成功后结果素材单独保存，不改原视频。
+ // 视频必须以公网 HTTPS 链接交给可灵（官方没有上传接口），这里使用既有的临时签名媒体链接。
+ async presenterLipsync(workspace,id,body={}) {
+  const {project}=await this.detail(workspace,id);this.assertProject(project);
+  const taskId=typeof body.taskId==='string'?body.taskId.trim():'';
+  const task=(project.tasks||[]).find(item=>item.id===taskId);
+  if(!task||nodeKind(task)!=="video")fail('LIPSYNC_NOT_READY','请选择一个视频分镜再做只改嘴。',422);
+  if(!task.dialogueAudio?.assetId||!task.dialogueAudio?.durationSec)fail('LIPSYNC_NOT_READY','请先合成配音，再做只改嘴。',422);
+  const rows=(await this.pool.query("SELECT output FROM sj_creation_runs WHERE workspace_id=$1 AND project_id=$2 AND task_id=$3 AND status='succeeded' AND output->>'assetId' IS NOT NULL ORDER BY created_at DESC LIMIT 1",[workspace,id,taskId])).rows;
+  const videoAssetId=rows[0]?.output?.assetId;
+  if(!videoAssetId)fail('LIPSYNC_NOT_READY','这个分镜还没有成功的视频，请先生成本镜。',422);
+  const audio=await this.media.source(workspace,task.dialogueAudio.assetId);
+  const video=await this.media.source(workspace,videoAssetId);
+  // 外部异步任务可能排队，链接给 1 小时；地址签名绑定素材与到期时间。
+  // 配了 OSS 中转时不需要这两个链接，取不到也不影响提交。
+  let videoUrl='',audioUrl='';
+  try { videoUrl=this.media.publicUrl(workspace,videoAssetId,3600);audioUrl=this.media.publicUrl(workspace,task.dialogueAudio.assetId,3600); } catch {}
+  const submitted=await this.hub.lipsyncSubmit({video,audio,videoUrl,audioUrl,durationSec:Number(task.dialogueAudio.durationSec),faceId:typeof body.faceId==='string'?body.faceId:''});
+  const state={status:'running',upstreamId:submitted.upstreamId,channelId:submitted.channelId,faceId:submitted.face?.id||null,videoAssetId,audioAssetId:task.dialogueAudio.assetId,assetId:null,error:null,createdAt:new Date().toISOString()};
+  await this.store.change(workspace,id,null,current=>{
+   const next=clone(current);
+   next.tasks=next.tasks.map(item=>item.id===taskId?{...item,lipsync:state}:item);
+   return next;
+  });
+  return {lipsync:{...state,faces:submitted.faces||[]}};
+ }
+ // 轮询对口型结果：成功后下载并保存为结果素材，再次调用直接返回已保存的结果。
+ async presenterLipsyncStatus(workspace,id,body={}) {
+  const {project}=await this.detail(workspace,id);this.assertProject(project);
+  const taskId=typeof body.taskId==='string'?body.taskId.trim():'';
+  const task=(project.tasks||[]).find(item=>item.id===taskId);
+  if(!task||nodeKind(task)!=="video")fail('LIPSYNC_NOT_READY','请选择一个视频分镜。',422);
+  const state=task.lipsync;
+  if(!state?.upstreamId)fail('LIPSYNC_NOT_READY','这个分镜还没有提交过只改嘴。',422);
+  if(['succeeded','failed'].includes(state.status))return {lipsync:state};
+  let result;
+  try{result=await this.hub.lipsyncPoll(state.upstreamId,state.channelId||'');}
+  catch(error){if(error instanceof AppError&&error.status<500)throw error;return {lipsync:{...state,status:'running'}};}
+  const next={...state};
+  if(result.status==='succeeded'&&result.bytes){
+   const asset=await this.media.put(workspace,{bytes:Buffer.from(result.bytes),mime:result.mime||'video/mp4',name:`${task.title||'分镜'}-只改嘴.mp4`,productId:project.productId,projectId:id,taskId,runId:null,role:'result',derivedFrom:{kind:'presenter-lipsync'}});
+   Object.assign(next,{status:'succeeded',assetId:asset.id,error:null,finishedAt:new Date().toISOString()});
+  }else if(result.status==='failed'){
+   Object.assign(next,{status:'failed',error:{code:'LIPSYNC_FAILED',message:'可灵对口型失败，请检查底片与配音后手动重试。'},finishedAt:new Date().toISOString()});
+   if(result.error?.message)next.error.message=result.error.message;
+  }
+  if(next.status!==state.status||next.assetId!==state.assetId)await this.store.change(workspace,id,null,current=>{
+   const updated=clone(current);
+   updated.tasks=updated.tasks.map(item=>item.id===taskId?{...item,lipsync:next}:item);
+   return updated;
+  });
+  return {lipsync:next};
  }
  // ---------- AI 分镜：素材清单与确认（V-16） ----------
  // 可用素材：商品创作图片、项目内成功的生成结果（图片与视频）、项目或商品下上传的音频与视频；每项一个短编号 M1、M2…。
@@ -1919,6 +2149,11 @@ export class CreationProjects {
     const mask=typeof task.maskAssetId==='string'?await this.store.get(workspace,task.maskAssetId,client):null;
     const retained=previous.tasks?.some(t=>t.id===task.id&&t.maskAssetId===task.maskAssetId);
     if(nodeKind(task)!=='edit'||!mask||mask.kind!=='asset'||mask.role!=='mask'||mask.mime!=='image/png'||mask.deletionPending||(!retained&&mask.trashedAt))fail('MASK_INVALID','蒙版只能用于改图节点，且必须是本工作空间已上传的蒙版图片。');
+   }
+   if(task.presenterAssetId!==undefined&&task.presenterAssetId!==null) {
+    const image=typeof task.presenterAssetId==='string'?await this.store.get(workspace,task.presenterAssetId,client):null;
+    const retained=previous.tasks?.some(t=>t.id===task.id&&t.presenterAssetId===task.presenterAssetId);
+    if(nodeKind(task)!=='video'||!image||image.kind!=='asset'||image.deletionPending||(!retained&&image.trashedAt)||!image.mime?.startsWith('image/')||!['creative','result'].includes(image.role))fail('PRESENTER_INVALID','人物参考图需要是本工作空间的创作图片或生成图片。');
    }
    if(task.tailFrame&&task.tailFrame.assetId) {
     const tf=task.tailFrame,before=previous.tasks?.find(t=>t.id===task.id)?.tailFrame;

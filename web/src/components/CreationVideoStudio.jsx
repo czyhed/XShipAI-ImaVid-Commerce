@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import '../styles/creation-video-studio.css';
 import { ConfirmDialog } from './ui.jsx';
+import PresenterWizard from './PresenterWizard.jsx';
 import DraftText from './DraftText.jsx';
 import { VideoModePanel, VideoTagPreview, VideoDialogue, VideoParams, VideoAdvanced } from './VideoNodeEditor.jsx';
 import { DubbedVideo } from './VoiceRoles.jsx';
@@ -9,6 +10,7 @@ import { pointText, analyzeVideoNode } from '../lib/video-node.js';
 import { normalizeVideoParameters, VIDEO_RESOLUTIONS } from '../../../shared/creation-video-parameters.mjs';
 import { SETTING_DEFAULTS, SETTING_RATIOS } from '../../../shared/creation-video-settings.mjs';
 import { SLOT_BY_MODE, shownSettings, shotDuration, shotCustomKeys, followProjectParams, shotIssues, shownRun, succeededRuns, dubAssetFor, buildPlaylist, studioSummary, moveItem, clock } from '../lib/video-studio.js';
+import { buildPresenterPrompt } from '../../../shared/creation-presenter.mjs';
 
 const uid = () => crypto.randomUUID();
 const statusLabels = { queued: '排队中', submitting: '正在提交', running: '生成中', unknown: '生成中', cancelling: '正在取消', cancelled: '已取消', failed: '失败', succeeded: '成功' };
@@ -51,6 +53,10 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
  const [confirmShot, setConfirmShot] = useState(null), [batchPlan, setBatchPlan] = useState(null), [burnSubtitles, setBurnSubtitles] = useState(false);
  const [selectedId, setSelectedId] = useState(null), [drawerChoice, setDrawerChoice] = useState(undefined), [player, setPlayer] = useState(false), [picker, setPicker] = useState(null);
  const [sections, setSections] = useState(SECTION_DEFAULT), [flash, setFlash] = useState(''), [focusReq, setFocusReq] = useState(null), [advancedOpen, setAdvancedOpen] = useState(false), [durationError, setDurationError] = useState('');
+ const [presenterOpen, setPresenterOpen] = useState(false);
+ // 只改嘴：按分镜保存可灵对口型的任务状态与结果素材。
+ const [lipsync, setLipsync] = useState({});
+ const lipTimers = useRef({});
  const promptBox = useRef(null);
  // 页面级错误统一走顶部提示；时长等字段错误仍留在输入框旁。
  const fail = useCallback(message => { setError(message || ''); if (message) notify?.(message, 'error'); }, [notify]);
@@ -147,6 +153,35 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
   accept(await creationRequest(backend, base + '/voice/strip-audio', { taskId: nodeId, ...(runId ? { runId } : {}) }));
   notify?.('已去除音轨，可以继续合成配音');
  });
+ // 只改嘴：提交可灵对口型后每 6 秒查询一次，成功后把结果素材显示在预览下方。
+ const pollLipsync = async (shotId, nodeId, attempt = 0) => {
+  if (attempt > 40) { setLipsync(old => ({ ...old, [shotId]: { ...old[shotId], status: 'failed', error: '查询超时，请稍后点「查看只改嘴结果」继续查询。' } })); return; }
+  try {
+   const data = await creationRequest(backend, base + '/presenter-lipsync-status', { taskId: nodeId });
+   const state = data.lipsync || {};
+   setLipsync(old => ({ ...old, [shotId]: state }));
+   if (state.status === 'running') lipTimers.current[shotId] = setTimeout(() => pollLipsync(shotId, nodeId, attempt + 1), 6000);
+   else if (state.status === 'succeeded') notify?.('只改嘴已完成，结果在「本镜预览」下方');
+   else if (state.status === 'failed') fail(state.error?.message || '只改嘴失败，请检查底片与配音。');
+  } catch (e) {
+   setLipsync(old => ({ ...old, [shotId]: { ...old[shotId], status: 'failed', error: e.message } }));
+  }
+ };
+ const runLipsync = shot => guard(async () => {
+  const nodeId = editor.storyboard()?.shots?.find(s => s.id === shot.id)?.nodeId;
+  if (!nodeId) { fail('分镜还没有同步到画布，请稍后再试。'); return; }
+  clearTimeout(lipTimers.current[shot.id]);
+  setLipsync(old => ({ ...old, [shot.id]: { status: 'running' } }));
+  try {
+   const data = await creationRequest(backend, base + '/presenter-lipsync', { taskId: nodeId });
+   setLipsync(old => ({ ...old, [shot.id]: data.lipsync || { status: 'running' } }));
+   lipTimers.current[shot.id] = setTimeout(() => pollLipsync(shot.id, nodeId), 6000);
+  } catch (e) {
+   setLipsync(old => ({ ...old, [shot.id]: { status: 'failed', error: e.message } }));
+   fail(e.message);
+  }
+ });
+ useEffect(() => () => { Object.values(lipTimers.current).forEach(clearTimeout); }, []);
  const removeShot = shot => guard(async () => {
   const index = draft.shots.findIndex(s => s.id === shot.id);
   patchShots(shots => shots.filter(s => s.id !== shot.id));
@@ -248,6 +283,16 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
    const tag = `{{ref:${ref}}}`, text = box.value, start = box.selectionStart ?? text.length, end = box.selectionEnd ?? start;
    change({ prompt: text.slice(0, start) + tag + text.slice(end) });
   };
+  // 人物口播提示词会随版本升级；按节点当前的人物/商品引用重建，避免旧分镜继续用旧提示词。
+  const refreshPresenterPrompt = () => {
+   const tasks = editor.tasks || [], edges = editor.edges || [];
+   const personNode = tasks.find(task => task.kind === 'image' && task.sourceAssetId === node.presenterAssetId);
+   if (!personNode) { fail('找不到人物参考图节点；请重新创建口播分镜。'); return; }
+   const productNodes = edges.filter(edge => edge.target === node.id && edge.targetHandle === 'refImage' && edge.source !== personNode.id)
+    .map(edge => tasks.find(task => task.id === edge.source)).filter(Boolean);
+   change({ prompt: buildPresenterPrompt({ style: node.presenterStyle, personTag: `{{ref:${personNode.id}}}`, productTags: productNodes.map(task => `{{ref:${task.id}}}`), productName: canvasDraft?.productSnapshot?.name || '' }) });
+   notify?.('人物口播提示词已更新；请检查后重新生成本镜');
+  };
   // 恢复跟随项目：节点上的分辨率 / 比例 / 时长覆盖全部清除；项目还没有设置时先把显示的默认值写成项目设置。
   const followProject = () => { if (!sb?.settings) editor.setProjectSetting('resolution', shown.resolution); change({ params: followProjectParams(node) }); };
   const dialogueCount = (node.dialogue || []).filter(line => line.text?.trim()).length;
@@ -262,10 +307,15 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
      </Section>
      <Section id="prompt" flash={flash === 'prompt'} title="提示词" open={sections.prompt} onToggle={toggle('prompt')}>
       <label className="v3-field"><span>视频提示词<span className="count">{(node.prompt || '').length} / 20000</span></span><DraftText ref={promptBox} multiline aria-label="视频提示词" rows={3} maxLength={20000} value={node.prompt || ''} disabled={lock} onCommit={prompt => change({ prompt })} placeholder="给视频模型的画面提示词；点击上方素材卡片可插入 <Picture N> 等标签" /></label>
+      {node.presenterAssetId && <div className="vs-prompt-tools"><button type="button" className="v3-btn small" disabled={lock} onClick={refreshPresenterPrompt}>刷新人物口播提示词</button><small className="v3-note">按当前人物/商品引用重建提示词，会覆盖手动修改。</small></div>}
       <VideoTagPreview task={node} analysis={analysis} locked={lock} change={change} editor={editor} />
      </Section>
      <Section id="dialogue" flash={flash === 'dialogue'} title="台词与配音" open={sections.dialogue} onToggle={toggle('dialogue')} badge={<small className="vs-sec-badge">{dialogueCount ? `${dialogueCount} 句${['post', 'lipsync'].includes(node.dubMode) ? ` · ${dub?.pending ? '配音合成中' : dub?.status === 'none' ? '待配音' : dub?.status === 'stale' ? '配音已过期' : dub?.dub?.status === 'running' ? '混音中' : dub?.dub?.status === 'failed' ? '混音失败' : dub?.needsMix ? '待混音' : dub?.status === 'fresh' ? '已配音' : ''}` : ''}` : '无台词'}</small>}>
       <VideoDialogue task={node} duration={shotDuration(sb, node)} locked={lock} change={change} editor={editor} />
+      {dub?.status === 'fresh' && !state.asset && <div className="vs-next-step" role="status">
+       <span>配音已就绪。下一步：在右侧「本镜预览」点「生成本镜」。</span>
+       <button type="button" className="v3-btn small" onClick={() => focusIssue(shot.id, { section: 'preview' })}>定位到「生成本镜」</button>
+      </div>}
       {!(editor.voiceRoles || []).length && <p className="v3-note">还没有角色。台词配音需要先给角色选择音色（顶部「角色与音色」）。</p>}
      </Section>
      <Section id="params" flash={flash === 'params'} title="参数" open={sections.params} onToggle={toggle('params')} badge={customKeys.length ? <span className="vs-flag custom">自定义</span> : <small className="vs-sec-badge">跟随项目</small>}>
@@ -282,7 +332,13 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
        <button className="v3-btn small primary" disabled={!writable || busy || saving || isActive(state.status)} onClick={() => runShot(shot)}>{state.status === 'failed' ? '重试本镜' : '生成本镜'}</button>
        {versions.length > 0 && <button className="v3-btn small" disabled={!writable || busy || saving || isActive(state.status)} onClick={() => runShot(shot, { regenerate: true })}>再生成一版</button>}
        {state.asset && <button className="v3-btn small" title="用 ffmpeg 去掉这段视频的音轨，不消耗积分" disabled={!writable || busy || saving || isActive(state.status)} onClick={() => stripShot(shot, state.shown?.id)}>去除音轨</button>}
+       {state.asset && dub?.status === 'fresh' && <button className="v3-btn small" title="保留底片画面，只重画嘴部；使用模型中心「环节默认 → 对口型」的渠道（阿里云 / 可灵），会产生费用" disabled={!writable || busy || saving || lipsync[shot.id]?.status === 'running'} onClick={() => runLipsync(shot)}>{lipsync[shot.id]?.status === 'running' ? '只改嘴处理中…' : '只改嘴'}</button>}
       </div>
+      {lipsync[shot.id]?.assetId && <div className="vs-lipsync-result">
+       <p className="v3-note">只改嘴结果（原片与配音保留，只有嘴部按配音重画）：</p>
+       <video className="vs-shot-preview" src={fileUrl(lipsync[shot.id].assetId)} muted controls preload="metadata" />
+      </div>}
+      {lipsync[shot.id]?.status === 'failed' && <p className="v3-note" role="status">只改嘴未完成：{lipsync[shot.id].error?.message || (typeof lipsync[shot.id].error === 'string' ? lipsync[shot.id].error : '') || '请稍后重试'}</p>}
       {state.status === 'failed' && <p className="v3-note" title={state.run?.error?.message || ''}>上次失败：{state.run?.error?.message || '请查看错误后重试'}</p>}
      </Section>
     </div>
@@ -300,6 +356,7 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
    </div>
    <span className="vs-summary" aria-label="整片合计">{summary.count} 镜 · 总时长 {clock(summary.seconds)} · {summary.count === 0 ? '无预估' : summary.pending === 0 ? '全部镜头已生成' : summary.points > 0 ? `待生成预估 ${pointText(summary.points)}` : '待生成预估 —'}</span>
    <span className="v3-grow" />
+   <button className="v3-btn" disabled={!writable || busy || saving} onClick={() => setPresenterOpen(true)}>人物口播</button>
    <button className={`v3-btn${drawer === 'script' ? ' on' : ''}`} aria-pressed={drawer === 'script'} onClick={() => setDrawerChoice(drawer === 'script' ? null : 'script')}>脚本</button>
    <button className="v3-btn" onClick={() => editor.openRoles?.()}>角色与音色</button>
    <button className="v3-btn" disabled={!draft.shots.length} onClick={() => setPlayer(true)}>连播预览</button>
@@ -405,6 +462,14 @@ export default function CreationVideoStudio({ backend, notify, projectId, detail
   </details>
   {player && <PreviewPlayer playlist={playlist} onClose={() => setPlayer(false)} />}
   {picker && nodeOf(current) && <MaterialPicker port={picker.port} task={nodeOf(current)} editor={editor} productId={canvasDraft?.productId} projectId={projectId} onClose={() => setPicker(null)} />}
+  {presenterOpen && <PresenterWizard backend={backend} projectId={projectId} detail={detail} editor={editor} flush={flush} accept={accept} writable={writable} notify={notify} fileUrl={fileUrl} creationRequest={creationRequest}
+   onClose={() => setPresenterOpen(false)}
+   onCreated={data => {
+    const shot = (data?.project?.storyboard?.shots || []).find(item => item.nodeId === data?.created?.taskId);
+    setPresenterOpen(false);
+    // 新分镜创建后直接选中并展开「台词与配音」，用户不需要自己找入口。
+    if (shot) focusIssue(shot.id, { section: 'dialogue' }); else setSelectedId(null);
+   }} />}
   <ConfirmDialog open={Boolean(confirmShot)} title="删除分镜" message={`删除「${confirmShot ? titleOf(confirmShot) : ''}」？画布上的对应视频节点会一并移除（已有生成记录的节点会保留）。`} confirmText="删除分镜" busy={saving} onCancel={() => setConfirmShot(null)} onConfirm={() => removeShot(confirmShot)} />
   {batchPlan && <div className="v3-overlay"><div className="v3-dialog" role="dialog" aria-modal="true" aria-label="批量生成预览">
    <header><h2>批量生成预览</h2><button aria-label="关闭" onClick={() => setBatchPlan(null)}>×</button></header>
