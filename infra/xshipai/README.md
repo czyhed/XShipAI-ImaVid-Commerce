@@ -1,6 +1,6 @@
 # XShipAI 测试工作台部署
 
-2026-10-31：源仓库 `leifengyang/agent-project` 的 main（运行代码 `fc150c6`）及 `feat/project-ai-workflow` 分支同步至私有仓库 `xshipai/agent-project`，保留 Git 历史。原仓库不变；这是独立副本，后续同步需显式拉取 upstream 并合并，不是定时镜像。
+2026-10-31：源仓库 agent-project 的 main（运行代码 `fc150c6`）及 `feat/project-ai-workflow` 分支同步至私有仓库 `xshipai/agent-project`，保留 Git 历史。原仓库不变；这是独立副本，后续同步需显式拉取 upstream 并合并，不是定时镜像。
 
 入口为 http://23.144.68.140:18180/，登录后点击 **商境**。18186 为受保护的应用入口，未登录或未从工作台启动均跳回桌面。账号密码和飞书规则沿用 XShipAI Desktop。商境容器内部 `SJ_AUTH=off` 使用共享测试空间；认证由外层网关负责，应用、数据库、素材存储均不发布宿主端口。不要给这些服务单独映射公网端口。
 
